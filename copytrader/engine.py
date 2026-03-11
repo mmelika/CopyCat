@@ -27,7 +27,7 @@ def _bankroll_bet_size(bankroll: float) -> float:
     if bankroll <= 0:
         return 0.0
     percent = 0.10 if bankroll < 100 else 0.05
-    sized_amount = min(bankroll * percent, 20.0)
+    sized_amount = min(bankroll * percent + 0.05, 20.0)
     return max(_round_up_to_cent(sized_amount), 0.01)
 
 
