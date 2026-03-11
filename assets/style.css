@@ -197,9 +197,9 @@ input {
 }
 
 .page {
-  max-width: 1600px;
+  max-width: 1760px;
   margin: 0 auto;
-  padding: 24px;
+  padding: 18px 20px 24px;
 }
 
 .market-strip,
@@ -292,7 +292,7 @@ thead th {
 .dashboard-grid,
 .modal-row {
   display: grid;
-  gap: 16px;
+  gap: 14px;
 }
 
 .stats-row {
@@ -301,7 +301,7 @@ thead th {
 }
 
 .dashboard-grid {
-  grid-template-columns: minmax(0, 1.12fr) minmax(0, 0.88fr);
+  grid-template-columns: minmax(0, 1.02fr) minmax(0, 0.98fr);
   align-items: start;
 }
 
@@ -310,8 +310,8 @@ thead th {
 }
 
 .stat-card {
-  padding: 18px 20px 20px;
-  border-radius: 20px;
+  padding: 16px 18px 18px;
+  border-radius: 18px;
 }
 
 .stat-value-row {
@@ -322,7 +322,7 @@ thead th {
 }
 
 .stat-value {
-  font-size: 34px;
+  font-size: 31px;
   line-height: 1;
   font-weight: 800;
   letter-spacing: -0.05em;
@@ -357,15 +357,16 @@ thead th {
 }
 
 .stat-sub {
-  margin-top: 10px;
+  margin-top: 8px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .section-card {
-  padding: 20px;
-  margin-bottom: 16px;
-  border-radius: 20px;
+  padding: 16px 16px 14px;
+  margin-bottom: 14px;
+  border-radius: 18px;
   overflow: hidden;
 }
 
@@ -379,7 +380,7 @@ thead th {
 }
 
 .section-header {
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
 
 .section-title {
@@ -398,7 +399,7 @@ thead th {
 }
 
 .trade-tabs {
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
 
 .trade-tabs .tab {
@@ -412,7 +413,7 @@ thead th {
   align-items: center;
   justify-content: center;
   margin-right: 8px;
-  padding: 10px 14px !important;
+  padding: 8px 12px !important;
   border-radius: 999px !important;
   border: 1px solid rgba(255, 255, 255, 0.07) !important;
   background: rgba(255, 255, 255, 0.03) !important;
@@ -435,12 +436,15 @@ table {
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
+  min-width: 100%;
 }
 
 thead th {
-  padding: 0 14px 12px;
+  padding: 0 10px 10px;
   text-align: left;
   border-bottom: 1px solid rgba(154, 188, 220, 0.14);
+  font-size: 10px;
+  letter-spacing: 0.1em;
 }
 
 tbody tr {
@@ -456,10 +460,10 @@ tbody tr:hover {
 }
 
 tbody td {
-  padding: 12px 14px;
+  padding: 10px 10px;
   border-bottom: 1px solid rgba(154, 188, 220, 0.08);
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
@@ -479,9 +483,9 @@ tbody td {
 
 .portfolio-card {
   position: relative;
-  margin-bottom: 16px;
-  padding: 24px 24px 12px;
-  border-radius: 28px;
+  margin-bottom: 14px;
+  padding: 20px 20px 10px;
+  border-radius: 24px;
   overflow: hidden;
   border: 1px solid rgba(154, 188, 220, 0.16);
   background:
@@ -535,7 +539,7 @@ tbody td {
 }
 
 .portfolio-chart-amount {
-  font-size: clamp(46px, 6vw, 64px);
+  font-size: clamp(40px, 5vw, 58px);
   line-height: 0.95;
   font-weight: 800;
   letter-spacing: -0.06em;
@@ -544,7 +548,7 @@ tbody td {
 
 .portfolio-chart-subtitle {
   color: var(--muted);
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 600;
 }
 
@@ -559,7 +563,7 @@ tbody td {
 
 .portfolio-range-btn {
   min-width: 78px;
-  padding: 14px 18px;
+  padding: 12px 16px;
   border-radius: 20px;
   border: 1px solid transparent;
   color: #94a5b8;
@@ -586,8 +590,8 @@ tbody td {
 .portfolio-graph {
   position: relative;
   z-index: 1;
-  height: 220px;
-  margin-top: 8px;
+  height: 200px;
+  margin-top: 6px;
 }
 
 .portfolio-graph .js-plotly-plot,
@@ -598,12 +602,12 @@ tbody td {
 
 .analysis-stack {
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }
 
 .analysis-block {
-  padding: 15px 16px;
-  border-radius: 16px;
+  padding: 13px 14px;
+  border-radius: 14px;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(154, 188, 220, 0.10);
 }
@@ -614,8 +618,38 @@ tbody td {
 
 .analysis-text {
   color: var(--text);
-  font-size: 13px;
-  line-height: 1.55;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.dashboard-col:last-child .section-card,
+.dashboard-col:last-child .trade-book-table {
+  overflow-x: auto;
+}
+
+.dashboard-col:last-child table {
+  min-width: 760px;
+}
+
+.dashboard-col:first-child table {
+  min-width: 620px;
+}
+
+@media (min-width: 1280px) {
+  .topbar {
+    padding: 14px 22px;
+  }
+
+  .market-strip {
+    padding: 18px 20px;
+    border-radius: 20px;
+    margin-bottom: 14px;
+  }
+
+  .market-strip-item {
+    padding: 14px 16px;
+    border-radius: 16px;
+  }
 }
 
 .modal-overlay {

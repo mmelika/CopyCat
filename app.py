@@ -289,7 +289,7 @@ def trade_views():
                 value="open-trades",
                 className="trade-tabs",
                 children=[
-                    dcc.Tab(label="Open Trades", value="open-trades", className="trade-tab", selected_className="trade-tab-selected"),
+                    dcc.Tab(label="Open Positions", value="open-trades", className="trade-tab", selected_className="trade-tab-selected"),
                     dcc.Tab(label="Closed Trades", value="closed-trades", className="trade-tab", selected_className="trade-tab-selected"),
                 ],
             ),
@@ -718,31 +718,37 @@ def refresh_dashboard(_, trade_tab):
 
     open_trade_rows = [
         [
+            fmt_pacific_time(row["entry_time"]),
             short_text(row["market_title"], 30),
             row["outcome"],
             fmt_number(row["shares"], 2),
+            fmt_number(row["entry_price"], 3),
             fmt_currency(row["cost_basis"]),
+            fmt_number(row["current_price"], 3),
             fmt_currency(row["market_value"]),
             fmt_signed_currency(row["unrealized_pnl"]),
         ]
-        for row in analytics["open_trades"][:20]
-    ] or [["No open trades", "-", "-", "-", "-", "-"]]
+        for row in analytics["open_trades"][:40]
+    ] or [["No open trades", "-", "-", "-", "-", "-", "-", "-", "-"]]
     closed_trade_rows = [
         [
+            fmt_pacific_time(row["entry_time"]),
             fmt_pacific_time(row["exit_time"]),
             short_text(row["market_title"], 26),
             row["outcome"],
             fmt_number(row["shares"], 2),
+            fmt_number(row["entry_price"], 3),
+            fmt_number(row["exit_price"], 3),
             fmt_currency(row["cost_basis"]),
             fmt_currency(row["proceeds"]),
             fmt_signed_currency(row["pnl"]),
         ]
-        for row in analytics["closed_trades"][:20]
-    ] or [["No closed trades", "-", "-", "-", "-", "-", "-"]]
+        for row in analytics["closed_trades"][:40]
+    ] or [["No closed trades", "-", "-", "-", "-", "-", "-", "-", "-", "-"]]
     trade_book_table = (
-        render_table(["Market", "Outcome", "Shares", "Cost", "Value", "P/L"], open_trade_rows)
+        render_table(["Bought At (PT)", "Market", "Outcome", "Shares", "Buy Px", "Cost", "Mark Px", "Value", "P/L"], open_trade_rows)
         if trade_tab == "open-trades"
-        else render_table(["Sold At (PT)", "Market", "Outcome", "Shares", "Cost", "Proceeds", "P/L"], closed_trade_rows)
+        else render_table(["Bought At (PT)", "Sold At (PT)", "Market", "Outcome", "Shares", "Buy Px", "Sell Px", "Cost", "Proceeds", "P/L"], closed_trade_rows)
     )
     trade_book_count = len(analytics["open_trades"]) if trade_tab == "open-trades" else len(analytics["closed_trades"])
     sync_rows = [
