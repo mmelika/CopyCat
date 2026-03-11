@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 import time
 import uuid
+import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -13,6 +14,12 @@ from .polymarket import PolymarketClient
 
 def _clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
+
+
+def _round_up_to_cent(value: float) -> float:
+    if value <= 0:
+        return 0.0
+    return math.ceil(value * 100) / 100.0
 
 
 @dataclass
@@ -357,10 +364,9 @@ class CopyTradingEngine:
             return CopyDecision("skip", "Leader wallet value is unavailable.")
         local_equity = max(float(portfolio["net_value"]), 0.0)
         proportional_amount = amount_usd / leader_wallet_value * local_equity * copy_ratio
-        requested_amount = round(min(proportional_amount, max_trade), 2)
-
-        if requested_amount < 0.01:
-            return CopyDecision("skip", "Trade size is below minimum copy threshold after wallet scaling.")
+        if proportional_amount > 0:
+            proportional_amount = max(_round_up_to_cent(proportional_amount), 0.01)
+        requested_amount = min(proportional_amount, max_trade)
 
         if side == "SELL" and not int(settings["copy_sells"]):
             return CopyDecision("skip", "Sell copying disabled.")
@@ -368,6 +374,7 @@ class CopyTradingEngine:
         if side == "BUY":
             remaining_exposure = round(float(settings["max_total_exposure_usd"]) - portfolio["gross_exposure"], 2)
             requested_amount = min(requested_amount, portfolio["cash_balance"], remaining_exposure)
+            requested_amount = _round_up_to_cent(requested_amount) if requested_amount > 0 else 0.0
             if requested_amount < 0.01:
                 return CopyDecision("skip", "No remaining buying capacity.")
             return CopyDecision("copy", "Buy trade eligible.", requested_amount_usd=requested_amount)
@@ -379,6 +386,7 @@ class CopyTradingEngine:
         price = max(float(trade.get("price") or 0.0), 0.01)
         max_sell_notional = round(float(local_position["shares"]) * price, 2)
         requested_amount = min(requested_amount, max_sell_notional)
+        requested_amount = _round_up_to_cent(requested_amount) if requested_amount > 0 else 0.0
         if requested_amount < 0.01:
             return CopyDecision("skip", "Remaining position is too small to sell.")
         return CopyDecision("copy", "Sell trade eligible.", requested_amount_usd=requested_amount)

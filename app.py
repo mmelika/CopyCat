@@ -175,7 +175,7 @@ def settings_modal():
                                 className="modal-row",
                                 children=[
                                     field("Copy Ratio", "settings-copy-ratio", "1.0"),
-                                    field("Max Copy Trade USD", "settings-max-copy-trade", "150"),
+                                    field("Max Copy Trade USD", "settings-max-copy-trade", "10"),
                                     field("Max Total Exposure USD", "settings-max-exposure", "2500"),
                                 ],
                             ),
