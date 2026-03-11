@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import os
+from zoneinfo import ZoneInfo
 
 import dash
 import plotly.graph_objects as go
@@ -30,6 +31,7 @@ app = dash.Dash(
 app.title = "CopyPelosi"
 server = app.server
 MAX_HEARTBEAT_STALE_SECONDS = 30
+PACIFIC_TZ = ZoneInfo("America/Los_Angeles")
 
 
 def parse_utc(value: str) -> datetime | None:
@@ -39,6 +41,27 @@ def parse_utc(value: str) -> datetime | None:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def to_pacific(value: str) -> datetime | None:
+    parsed = parse_utc(value)
+    if parsed is None:
+        return None
+    return parsed.astimezone(PACIFIC_TZ)
+
+
+def fmt_pacific_time(value: str) -> str:
+    dt = to_pacific(value)
+    return dt.strftime("%m/%d %I:%M:%S %p") if dt else "-"
+
+
+def fmt_pacific_clock() -> str:
+    return datetime.now(PACIFIC_TZ).strftime("%b %d, %Y %I:%M:%S %p %Z")
+
+
+def fmt_pacific_day(value: str) -> str:
+    dt = to_pacific(value)
+    return dt.strftime("%Y-%m-%d") if dt else (value or "-")
 
 
 def engine_runtime_status(app_state: dict, settings: dict) -> tuple[str, str, int | None]:
@@ -64,8 +87,10 @@ def heartbeat_label(app_state: dict, runtime_status: str, stale_age_seconds: int
     if runtime_status == "STARTING":
         return "Waiting for heartbeat"
     if last_sync_at:
-        age_seconds = int((datetime.now(timezone.utc) - parse_utc(last_sync_at)).total_seconds())
-        return f"Heartbeat {age_seconds}s ago"
+        parsed = parse_utc(last_sync_at)
+        if parsed is not None:
+            age_seconds = int((datetime.now(timezone.utc) - parsed).total_seconds())
+            return f"Heartbeat {age_seconds}s ago"
     if runtime_status == "PAUSED":
         return "Heartbeat paused"
     return "No heartbeat"
@@ -329,7 +354,7 @@ def portfolio_chart():
     if not snapshots:
         snapshots = [{"ts": "-", "net_value": 0.0}]
     baseline = float(snapshots[0]["net_value"] or 0.0)
-    x_values = [row["ts"][5:16].replace("T", " ") for row in snapshots]
+    x_values = [fmt_pacific_time(row["ts"]) for row in snapshots]
     y_values = [row["net_value"] for row in snapshots]
     colors = ["#22c55e" if value >= baseline else "#ef4444" for value in y_values]
     figure = go.Figure()
@@ -443,6 +468,7 @@ def refresh_dashboard(_, trade_tab):
     ] or [["No source positions yet", "-", "-", "-", "-"]]
     copied_trade_rows = [
         [
+            fmt_pacific_time(row["created_at"]),
             short_text(row["market_title"], 34),
             row["outcome"],
             row["side"],
@@ -451,7 +477,7 @@ def refresh_dashboard(_, trade_tab):
             row["status"],
         ]
         for row in copy_orders
-    ] or [["No copied trades yet", "-", "-", "-", "-", "-"]]
+    ] or [["No copied trades yet", "-", "-", "-", "-", "-", "-"]]
     daily_rows = [
         [
             row["date"],
@@ -475,6 +501,7 @@ def refresh_dashboard(_, trade_tab):
     ] or [["No open trades", "-", "-", "-", "-", "-"]]
     closed_trade_rows = [
         [
+            fmt_pacific_time(row["exit_time"]),
             short_text(row["market_title"], 26),
             row["outcome"],
             fmt_number(row["shares"], 2),
@@ -483,16 +510,16 @@ def refresh_dashboard(_, trade_tab):
             fmt_signed_currency(row["pnl"]),
         ]
         for row in analytics["closed_trades"][:20]
-    ] or [["No closed trades", "-", "-", "-", "-", "-"]]
+    ] or [["No closed trades", "-", "-", "-", "-", "-", "-"]]
     trade_book_table = (
         render_table(["Market", "Outcome", "Shares", "Cost", "Value", "P/L"], open_trade_rows)
         if trade_tab == "open-trades"
-        else render_table(["Market", "Outcome", "Shares", "Cost", "Proceeds", "P/L"], closed_trade_rows)
+        else render_table(["Sold At (PT)", "Market", "Outcome", "Shares", "Cost", "Proceeds", "P/L"], closed_trade_rows)
     )
     trade_book_count = len(analytics["open_trades"]) if trade_tab == "open-trades" else len(analytics["closed_trades"])
     sync_rows = [
         [
-            row["started_at"][11:19] if row["started_at"] else "-",
+            fmt_pacific_time(row["started_at"]),
             row["status"],
             str(row["trades_seen"]),
             str(row["new_trades"]),
@@ -503,7 +530,7 @@ def refresh_dashboard(_, trade_tab):
     ] or [["-", "-", "-", "-", "-", "-"]]
     log_rows = [
         [
-            row["ts"][11:19] if row["ts"] else "-",
+            fmt_pacific_time(row["ts"]),
             row["level"],
             row["component"],
             row["message"][:48],
@@ -541,9 +568,8 @@ def refresh_dashboard(_, trade_tab):
                     html.Div("Fast Copy Model", className="analysis-label"),
                     html.Div(
                         f"Polling every {settings['sync_interval_ms']}ms with {settings['trade_fetch_limit']} trade lookback. "
-                        f"Paper execution sizes as proportional wallet slices against {settings['leader_wallet_address']}, "
-                        f"scaled by {settings['copy_ratio']}x and capped at {fmt_currency(settings['max_copy_trade_usd'])}. "
-                        f"The dashboard refreshes separately and never gates copy execution.",
+                        "Paper execution sizes each copied trade at 10% of bankroll below $100, then 5% at $100+, "
+                        "with a hard cap of $20 per bet. The dashboard refreshes separately and never gates copy execution.",
                         className="analysis-text",
                     ),
                 ],
@@ -562,7 +588,7 @@ def refresh_dashboard(_, trade_tab):
                 className="analysis-block",
                 children=[
                     html.Div("Copy Start Time", className="analysis-label"),
-                    html.Div(app_state.get("copy_start_at") or "Immediate", className="analysis-text mono"),
+                    html.Div(fmt_pacific_time(app_state.get("copy_start_at", "")) if app_state.get("copy_start_at") else "Immediate", className="analysis-text mono"),
                 ],
             ),
             html.Div(
@@ -575,14 +601,14 @@ def refresh_dashboard(_, trade_tab):
         ],
     )
 
-    refresh_text = f"Last sync: {app_state['last_sync_at'][11:19] if app_state['last_sync_at'] else 'never'}"
+    refresh_text = f"Last sync: {fmt_pacific_time(app_state['last_sync_at']) if app_state['last_sync_at'] else 'never'}"
 
     return (
         heartbeat_label(app_state, runtime_status, stale_age_seconds),
         runtime_class,
         "Pause" if app_state["engine_status"] == "RUNNING" else "Resume",
         refresh_text,
-        datetime.now().strftime("%b %d, %Y %H:%M:%S"),
+        fmt_pacific_clock(),
         target_label,
         target_wallet,
         str(len(pending)),
@@ -597,14 +623,14 @@ def refresh_dashboard(_, trade_tab):
         str(len(daily_performance)),
         render_table(["Date", "Day Change", "Closed P/L", "Portfolio"], daily_rows),
         str(len(sync_runs)),
-        render_table(["Time", "Status", "Seen", "New", "Copied", "Latency"], sync_rows),
+        render_table(["Time (PT)", "Status", "Seen", "New", "Copied", "Latency"], sync_rows),
         str(len(copy_orders)),
-        render_table(["Market", "Outcome", "Side", "USD", "Px", "Status"], copied_trade_rows),
+        render_table(["Completed At (PT)", "Market", "Outcome", "Side", "USD", "Px", "Status"], copied_trade_rows),
         str(trade_book_count),
         trade_book_table,
         analysis,
         str(len(logs)),
-        render_table(["Time", "Level", "Comp", "Message"], log_rows),
+        render_table(["Time (PT)", "Level", "Comp", "Message"], log_rows),
     )
 
 

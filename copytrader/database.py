@@ -5,12 +5,24 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from .config import DB_PATH, DEFAULT_APP_STATE, DEFAULT_SETTINGS
+
+PACIFIC_TZ = ZoneInfo("America/Los_Angeles")
 
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def pacific_day(value: str) -> str:
+    if not value:
+        return ""
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(PACIFIC_TZ).strftime("%Y-%m-%d")
+    except ValueError:
+        return ""
 
 
 def _json(value):
@@ -636,7 +648,7 @@ def trade_analytics(db_path: Path | str = DB_PATH) -> dict:
                     "pnl": pnl,
                 }
             )
-            daily_key = (ts or "")[:10]
+            daily_key = pacific_day(ts)
             if daily_key:
                 daily_realized[daily_key] = round(daily_realized.get(daily_key, 0.0) + pnl, 2)
             lot["remaining_shares"] = round(lot["remaining_shares"] - matched_shares, 6)
@@ -684,7 +696,7 @@ def daily_portfolio_performance(db_path: Path | str = DB_PATH) -> list[dict]:
     snapshots = list_portfolio_snapshots(db_path, limit=1000)
     by_day: dict[str, dict] = {}
     for snapshot in snapshots:
-        day = (snapshot.get("ts") or "")[:10]
+        day = pacific_day(snapshot.get("ts") or "")
         if not day:
             continue
         by_day[day] = snapshot
