@@ -16,6 +16,7 @@ from .polymarket import PolymarketClient
 MIN_BET_USD = 0.05
 MEANINGFUL_MIN_BET_USD = 1.00
 MIN_CASH_RESERVE_PCT = 0.20
+MAX_SINGLE_BET_BANKROLL_PCT = 0.20
 MAX_TRADE_FETCH_LIMIT = 10
 
 
@@ -77,16 +78,21 @@ def _copy_trade_size(local_equity: float, source_amount_usd: float, leader_walle
     if buying_capacity <= 0:
         return 0.0
 
+    single_bet_cap = _round_up_to_cent(local_equity * MAX_SINGLE_BET_BANKROLL_PCT)
+    effective_capacity = min(buying_capacity, single_bet_cap)
+    if effective_capacity <= 0:
+        return 0.0
+
     if source_amount_usd <= 0 or leader_wallet_value <= 0:
-        return buying_capacity
+        return effective_capacity
 
     aggression_fraction = _clamp(source_amount_usd / leader_wallet_value, 0.0, 1.0)
     scaled_amount = _round_up_to_cent(local_equity * aggression_fraction)
     if scaled_amount >= MEANINGFUL_MIN_BET_USD:
-        return min(scaled_amount, buying_capacity)
+        return min(scaled_amount, effective_capacity)
 
     # If proportional sizing would collapse into dust, deploy available cash instead.
-    return buying_capacity
+    return effective_capacity
 
 
 @dataclass
