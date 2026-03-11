@@ -11,6 +11,8 @@ from . import database
 from .config import DB_PATH
 from .polymarket import PolymarketClient
 
+MIN_BET_USD = 0.05
+
 
 def _clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
@@ -28,7 +30,7 @@ def _bankroll_bet_size(bankroll: float) -> float:
         return 0.0
     percent = 0.10 if bankroll < 100 else 0.05
     sized_amount = min(bankroll * percent + 0.05, 20.0)
-    return max(_round_up_to_cent(sized_amount), 0.01)
+    return max(_round_up_to_cent(sized_amount), MIN_BET_USD)
 
 
 @dataclass
@@ -377,7 +379,7 @@ class CopyTradingEngine:
             remaining_exposure = round(float(settings["max_total_exposure_usd"]) - portfolio["gross_exposure"], 2)
             requested_amount = min(requested_amount, portfolio["cash_balance"], remaining_exposure)
             requested_amount = _round_up_to_cent(requested_amount) if requested_amount > 0 else 0.0
-            if requested_amount < 0.01:
+            if requested_amount < MIN_BET_USD:
                 return CopyDecision("skip", "No remaining buying capacity.")
             return CopyDecision("copy", "Buy trade eligible.", requested_amount_usd=requested_amount)
 
@@ -389,7 +391,7 @@ class CopyTradingEngine:
         max_sell_notional = round(float(local_position["shares"]) * price, 2)
         requested_amount = min(requested_amount, max_sell_notional)
         requested_amount = _round_up_to_cent(requested_amount) if requested_amount > 0 else 0.0
-        if requested_amount < 0.01:
+        if requested_amount < MIN_BET_USD:
             return CopyDecision("skip", "Remaining position is too small to sell.")
         return CopyDecision("copy", "Sell trade eligible.", requested_amount_usd=requested_amount)
 
