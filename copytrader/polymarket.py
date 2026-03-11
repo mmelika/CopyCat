@@ -283,10 +283,15 @@ class PolymarketClient:
                 or item.get("value"),
                 0.0,
             )
-            explicit_price = _to_float(item.get("price") or item.get("avgPrice") or item.get("outcomePrice"), 0.0)
-            price = explicit_price
-            if price <= 0 and notional_usd > 0 and shares > 0:
-                price = round(notional_usd / shares, 6)
+            live_price = _to_float(
+                item.get("outcomePrice")
+                or item.get("currentPrice")
+                or item.get("markPrice")
+                or item.get("price"),
+                0.0,
+            )
+            derived_price = round(notional_usd / shares, 6) if notional_usd > 0 and shares > 0 else 0.0
+            price = live_price or derived_price
             market_slug = item.get("marketSlug") or item.get("slug") or item.get("conditionId") or "unknown-market"
             outcome = item.get("outcome") or item.get("token") or item.get("outcomeName") or "UNKNOWN"
             side = "BUY"
