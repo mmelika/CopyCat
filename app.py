@@ -786,7 +786,7 @@ def save_settings(_, target_handle, target_wallet, leader_wallet, max_exposure, 
         "paper_cash_balance": float(cash_balance or 0),
         "slippage_bps": int(float(slippage_bps or 0)),
         "sync_interval_ms": int(float(sync_interval or 1200)),
-        "trade_fetch_limit": int(float(trade_limit or 100)),
+        "trade_fetch_limit": min(10, max(1, int(float(trade_limit or 10)))),
         "copy_sells": int(float(copy_sells or 0)),
     }
     database.update_settings(updates, DB_PATH)

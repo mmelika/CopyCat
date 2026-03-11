@@ -16,6 +16,7 @@ from .polymarket import PolymarketClient
 MIN_BET_USD = 0.05
 MEANINGFUL_MIN_BET_USD = 1.00
 MIN_CASH_RESERVE_PCT = 0.20
+MAX_TRADE_FETCH_LIMIT = 10
 
 
 def _clamp(value: float, lower: float, upper: float) -> float:
@@ -289,7 +290,8 @@ class CopyTradingEngine:
             target = settings["target_wallet"] or settings["target_handle"]
             profile = self.client.resolve_target_wallet(target)
             previous_local_positions = database.get_local_positions(self.db_path)
-            trades = self.client.fetch_trades(profile["wallet"], handle=profile["handle"], limit=int(settings["trade_fetch_limit"]))
+            trade_fetch_limit = max(1, min(int(settings["trade_fetch_limit"]), MAX_TRADE_FETCH_LIMIT))
+            trades = self.client.fetch_trades(profile["wallet"], handle=profile["handle"], limit=trade_fetch_limit)
             positions = self.client.fetch_positions(profile["wallet"], limit=100)
             leader_wallet_value = self._get_leader_wallet_value(settings, profile["wallet"], positions)
             bootstrap_copied = self._bootstrap_current_source_positions(
