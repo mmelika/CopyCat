@@ -578,47 +578,20 @@ def settings_modal():
 app.layout = html.Div(
     [
         dcc.Interval(id="refresh-interval", interval=5000, n_intervals=0),
-        dcc.Store(id="settings-modal-store", data={"open": False}),
         topbar(),
-        html.Div(
-            className="page",
+        stats_strip(),
+        dcc.Tabs(
+            id="page-tabs",
+            value="live",
+            className="page-tabs",
+            parent_className="page-tabs",
             children=[
-                overview_shell(),
-                html.Div(
-                    className="pulse-grid",
-                    children=[
-                        pulse_card("Realized Today", "pulse-daily-realized", "pulse-daily-realized-sub", "pulse-daily-realized-chip"),
-                        pulse_card("Unrealized P/L", "pulse-unrealized", "pulse-unrealized-sub", "pulse-unrealized-chip"),
-                        pulse_card("Copied Volume", "pulse-copied-notional", "pulse-copied-sub"),
-                        pulse_card("Recent Syncs", "pulse-sync-health", "pulse-sync-sub", "pulse-sync-chip"),
-                    ],
-                ),
-                html.Div(
-                    className="dashboard-grid",
-                    children=[
-                        html.Div(
-                            className="dashboard-col dashboard-col-wide",
-                            children=[
-                                section("Paper Portfolio Curve", "portfolio-chart", graph=True),
-                                trade_views(),
-                                section("Daily Performance", "daily-performance-table", "daily-performance-badge"),
-                            ],
-                        ),
-                        html.Div(
-                            className="dashboard-col",
-                            children=[
-                                section("Execution Brief", "analysis-panel"),
-                                section("Source Positions", "source-positions-table", "source-positions-badge"),
-                                section("Copied Trades", "copied-trades-table", "copied-trades-badge"),
-                                section("Sync History", "sync-history-table", "sync-history-badge"),
-                                section("Engine Log", "engine-log-table", "engine-log-badge"),
-                            ],
-                        ),
-                    ],
-                ),
+                dcc.Tab(label="Live", value="live", className="page-tab", selected_className="page-tab--selected", children=live_tab()),
+                dcc.Tab(label="Portfolio", value="portfolio", className="page-tab", selected_className="page-tab--selected", children=portfolio_tab()),
+                dcc.Tab(label="History", value="history", className="page-tab", selected_className="page-tab--selected", children=history_tab()),
+                dcc.Tab(label="Settings", value="settings", className="page-tab", selected_className="page-tab--selected", children=settings_tab_content()),
             ],
         ),
-        settings_modal(),
     ]
 )
 
