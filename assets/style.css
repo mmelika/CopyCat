@@ -700,14 +700,15 @@ tbody td {
 }
 
 /* ─── Page Tabs ──────────────────────────────────────── */
-.page-tabs > .tab-bar {
+.tab-container.page-tabs {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
   background: transparent !important;
   border-bottom: 1px solid rgba(255, 255, 255, 0.07) !important;
-  padding: 0 !important;
+  padding: 0 24px !important;
   max-width: 1560px;
   margin: 0 auto;
-  padding-left: 24px !important;
-  padding-right: 24px !important;
 }
 
 .page-tab {
