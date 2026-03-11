@@ -20,4 +20,13 @@ jobs:
             export APP_DIR="${{ secrets.EC2_APP_DIR }}"
             export BRANCH="main"
             cd "${APP_DIR:-/home/ec2-user/CopyCat}"
-            bash deploy/deploy_on_ec2.sh
+            git fetch origin "$BRANCH"
+            git reset --hard "origin/$BRANCH"
+            if [ ! -d ".venv" ]; then
+              python3 -m venv .venv
+            fi
+            . .venv/bin/activate
+            pip install --upgrade pip
+            pip install -r requirements.txt
+            sudo systemctl restart copycat
+            sudo systemctl is-active --quiet copycat
