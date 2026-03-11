@@ -298,6 +298,48 @@ def trade_views():
     )
 
 
+def portfolio_breakdown_card():
+    return html.Div(
+        className="portfolio-breakdown-card",
+        children=[
+            html.Div(
+                className="section-header",
+                children=[
+                    html.Span("Portfolio Breakdown", className="section-title"),
+                    html.Span(id="portfolio-breakdown-badge", className="badge"),
+                ],
+            ),
+            html.Div(
+                className="portfolio-breakdown-summary",
+                children=[
+                    html.Div(
+                        className="portfolio-breakdown-metric",
+                        children=[
+                            html.Div("Cash", className="portfolio-breakdown-label"),
+                            html.Div(id="portfolio-cash-allocation", className="portfolio-breakdown-value"),
+                        ],
+                    ),
+                    html.Div(
+                        className="portfolio-breakdown-metric",
+                        children=[
+                            html.Div("Holdings", className="portfolio-breakdown-label"),
+                            html.Div(id="portfolio-holdings-allocation", className="portfolio-breakdown-value"),
+                        ],
+                    ),
+                    html.Div(
+                        className="portfolio-breakdown-metric",
+                        children=[
+                            html.Div("Largest Position", className="portfolio-breakdown-label"),
+                            html.Div(id="portfolio-top-holding", className="portfolio-breakdown-value"),
+                        ],
+                    ),
+                ],
+            ),
+            html.Div(id="portfolio-breakdown-list", className="portfolio-breakdown-list"),
+        ],
+    )
+
+
 def settings_modal():
     field = lambda label, field_id, placeholder, value=None: html.Div(
         className="settings-field",
@@ -426,7 +468,7 @@ app.layout = html.Div(
                         html.Div(
                             className="dashboard-col",
                             children=[
-                                section("Source Positions", "source-positions-table", "source-positions-badge"),
+                                portfolio_breakdown_card(),
                                 portfolio_curve_card(),
                                 section("Daily Performance", "daily-performance-table", "daily-performance-badge"),
                                 section("Sync History", "sync-history-table", "sync-history-badge"),
@@ -435,7 +477,7 @@ app.layout = html.Div(
                         html.Div(
                             className="dashboard-col",
                             children=[
-                                section("Copied Trades", "copied-trades-table", "copied-trades-badge"),
+                                section("Target Trade Feed", "copied-trades-table", "copied-trades-badge"),
                                 section("Sell Match Audit", "sell-match-table", "sell-match-badge"),
                                 trade_views(),
                                 section("Live Analysis", "analysis-panel"),
@@ -637,8 +679,11 @@ def refresh_portfolio_chart(_, range_key):
     Output("stat-net-chip", "children"),
     Output("stat-net-chip", "className"),
     Output("stat-net-sub", "children"),
-    Output("source-positions-badge", "children"),
-    Output("source-positions-table", "children"),
+    Output("portfolio-breakdown-badge", "children"),
+    Output("portfolio-cash-allocation", "children"),
+    Output("portfolio-holdings-allocation", "children"),
+    Output("portfolio-top-holding", "children"),
+    Output("portfolio-breakdown-list", "children"),
     Output("daily-performance-badge", "children"),
     Output("daily-performance-table", "children"),
     Output("sync-history-badge", "children"),
@@ -661,6 +706,7 @@ def refresh_dashboard(_, trade_tab):
     runtime_status, runtime_class, stale_age_seconds = engine_runtime_status(app_state, settings)
     live_positions = database.fetch_live_source_positions(DB_PATH)
     source_positions = live_positions[:10]
+    source_trades = database.list_source_trades(18, DB_PATH)
     copy_orders = database.list_copy_orders(12, DB_PATH)
     sell_match_rows = database.list_sell_match_audit(12, DB_PATH)
     pending = database.list_pending_source_trades(DB_PATH)
@@ -673,27 +719,17 @@ def refresh_dashboard(_, trade_tab):
     effective_exposure_cap = _effective_exposure_cap(settings, portfolio)
 
     active_positions_value = float(portfolio["gross_exposure"])
-    source_position_rows = [
-        [
-            short_text(row["market_title"], 36),
-            row["outcome"],
-            fmt_number(row["shares"], 2),
-            fmt_currency(row["notional_usd"]),
-            fmt_number(row["price"], 3),
-        ]
-        for row in source_positions
-    ] or [["No source positions yet", "-", "-", "-", "-"]]
     copied_trade_rows = [
         [
             fmt_pacific_time(row["created_at"]),
             short_text(row["market_title"], 34),
             row["outcome"],
             row["side"],
-            fmt_currency(row["requested_amount_usd"]),
-            fmt_number(row["executed_price"], 3),
-            row["status"],
+            fmt_currency(row["amount_usd"]),
+            fmt_number(row["price"], 3),
+            row["copy_status"],
         ]
-        for row in copy_orders
+        for row in source_trades
     ] or [["No copied trades yet", "-", "-", "-", "-", "-", "-"]]
     sell_audit_rows = [
         [
@@ -751,6 +787,62 @@ def refresh_dashboard(_, trade_tab):
         else render_table(["Bought At (PT)", "Sold At (PT)", "Market", "Outcome", "Shares", "Buy Px", "Sell Px", "Cost", "Proceeds", "P/L"], closed_trade_rows)
     )
     trade_book_count = len(analytics["open_trades"]) if trade_tab == "open-trades" else len(analytics["closed_trades"])
+    net_value = max(float(portfolio["net_value"]), 0.01)
+    cash_pct = round((float(portfolio["cash_balance"]) / net_value) * 100, 1) if net_value else 0.0
+    holdings_pct = round((float(portfolio["gross_exposure"]) / net_value) * 100, 1) if net_value else 0.0
+    open_positions = analytics["open_positions"][:8]
+    top_holding = analytics["open_positions"][0] if analytics["open_positions"] else None
+    holdings_list = []
+    holdings_list.append(
+        html.Div(
+            className="portfolio-holding-row portfolio-holding-row-cash",
+            children=[
+                html.Div(
+                    className="portfolio-holding-main",
+                    children=[
+                        html.Div("Cash", className="portfolio-holding-title"),
+                        html.Div("Available buying power", className="portfolio-holding-subtitle"),
+                    ],
+                ),
+                html.Div(
+                    className="portfolio-holding-stats",
+                    children=[
+                        html.Div(f"{cash_pct:.1f}%", className="portfolio-holding-weight"),
+                        html.Div(fmt_currency(portfolio["cash_balance"]), className="portfolio-holding-amount"),
+                    ],
+                ),
+            ],
+        )
+    )
+    for row in open_positions:
+        allocation_pct = round((float(row["market_value"]) / net_value) * 100, 1) if net_value else 0.0
+        holdings_list.append(
+            html.Div(
+                className="portfolio-holding-row",
+                children=[
+                    html.Div(
+                        className="portfolio-holding-main",
+                        children=[
+                            html.Div(short_text(row["market_title"], 42), className="portfolio-holding-title"),
+                            html.Div(
+                                f"{row['outcome']} | {fmt_number(row['shares'], 2)} shares @ {fmt_number(row['current_price'], 3)}",
+                                className="portfolio-holding-subtitle",
+                            ),
+                        ],
+                    ),
+                    html.Div(
+                        className="portfolio-holding-stats",
+                        children=[
+                            html.Div(f"{allocation_pct:.1f}%", className="portfolio-holding-weight"),
+                            html.Div(fmt_currency(row["market_value"]), className="portfolio-holding-amount"),
+                            html.Div(fmt_signed_currency(row["unrealized_pnl"]), className=f"portfolio-holding-pnl {signed_class(row['unrealized_pnl'])}"),
+                        ],
+                    ),
+                ],
+            )
+        )
+    if not analytics["open_positions"]:
+        holdings_list.append(html.Div("No active holdings", className="portfolio-empty"))
     sync_rows = [
         [
             fmt_pacific_time(row["started_at"]),
@@ -861,14 +953,17 @@ def refresh_dashboard(_, trade_tab):
         net_chip_text,
         f"stat-chip {signed_class(net_gain)}",
         f"Cash {fmt_currency(portfolio['cash_balance'])} + Marked Positions {fmt_currency(portfolio['gross_exposure'])} | {fmt_signed_currency(portfolio['total_gain'])} ({portfolio['total_gain_pct']:+.2f}%) vs start",
-        str(len(source_positions)),
-        render_table(["Market", "Outcome", "Shares", "Notional", "Price"], source_position_rows),
+        str(portfolio["positions_count"]),
+        f"{cash_pct:.1f}% | {fmt_currency(portfolio['cash_balance'])}",
+        f"{holdings_pct:.1f}% | {fmt_currency(portfolio['gross_exposure'])}",
+        f"{short_text(top_holding['market_title'], 24)} | {fmt_currency(top_holding['market_value'])}" if top_holding else "No holdings yet",
+        holdings_list,
         str(len(daily_performance)),
         render_table(["Date", "Day Change", "Closed P/L", "Portfolio"], daily_rows),
         str(len(sync_runs)),
         render_table(["Time (PT)", "Status", "Seen", "New", "Copied", "Latency"], sync_rows),
-        str(len(copy_orders)),
-        render_table(["Completed At (PT)", "Market", "Outcome", "Side", "USD", "Px", "Status"], copied_trade_rows),
+        str(len(source_trades)),
+        render_table(["Trade Time (PT)", "Market", "Outcome", "Side", "USD", "Px", "Copy Status"], copied_trade_rows),
         str(len(sell_match_rows)),
         render_table(["Sold At (PT)", "Market", "Outcome", "Match", "Local Position", "Source Trade"], sell_audit_rows),
         str(trade_book_count),

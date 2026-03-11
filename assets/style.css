@@ -495,6 +495,128 @@ tbody td {
   box-shadow: var(--shadow);
 }
 
+.portfolio-breakdown-card {
+  padding: 16px 16px 14px;
+  margin-bottom: 14px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, var(--panel-strong), var(--panel));
+  box-shadow: var(--shadow);
+}
+
+.portfolio-breakdown-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.portfolio-breakdown-metric {
+  padding: 12px 13px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(154, 188, 220, 0.10);
+}
+
+.portfolio-breakdown-label {
+  margin-bottom: 6px;
+  color: var(--faint);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.portfolio-breakdown-value {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.portfolio-breakdown-list {
+  display: grid;
+  gap: 8px;
+}
+
+.portfolio-holding-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 13px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(154, 188, 220, 0.08);
+}
+
+.portfolio-holding-row-cash {
+  background: rgba(57, 167, 255, 0.06);
+  border-color: rgba(57, 167, 255, 0.16);
+}
+
+.portfolio-holding-main {
+  min-width: 0;
+}
+
+.portfolio-holding-title {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.portfolio-holding-subtitle {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.portfolio-holding-stats {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.portfolio-holding-weight,
+.portfolio-holding-amount,
+.portfolio-holding-pnl {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.portfolio-holding-weight {
+  min-width: 54px;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: right;
+}
+
+.portfolio-holding-amount {
+  min-width: 76px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  text-align: right;
+}
+
+.portfolio-holding-pnl {
+  min-width: 62px;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: right;
+}
+
+.portfolio-empty {
+  padding: 16px 13px;
+  border-radius: 14px;
+  color: var(--muted);
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(154, 188, 220, 0.08);
+}
+
 .portfolio-card::after {
   content: '';
   position: absolute;
@@ -747,6 +869,10 @@ tbody td {
   .portfolio-range-group {
     width: 100%;
   }
+
+  .portfolio-breakdown-summary {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 760px) {
@@ -787,5 +913,15 @@ tbody td {
 
   .portfolio-graph {
     height: 190px;
+  }
+
+  .portfolio-holding-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .portfolio-holding-stats {
+    width: 100%;
+    justify-content: space-between;
   }
 }
