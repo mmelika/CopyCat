@@ -22,6 +22,7 @@ BUY_REPLAY_GUARD_SECONDS = 15
 FRESH_FILL_MARK_GRACE_SECONDS = 5
 EXPOSURE_CAP_STEP_NET_VALUE_USD = 20.0
 EXPOSURE_CAP_STEP_INCREASE_USD = 10.0
+FULLY_PRICED_EXIT_THRESHOLD = 0.999
 
 
 def _clamp(value: float, lower: float, upper: float) -> float:
@@ -369,6 +370,10 @@ class CopyTradingEngine:
             failed += backlog_failed
             copied += bootstrap_copied
             database.refresh_local_position_market_values(self.db_path, freeze_recent_seconds=FRESH_FILL_MARK_GRACE_SECONDS, source_positions=positions)
+            auto_liquidated = self._liquidate_fully_priced_positions(settings, positions)
+            copied += auto_liquidated
+            if auto_liquidated:
+                database.refresh_local_position_market_values(self.db_path, source_positions=positions)
             reconciliation_mismatches = self._reconcile_source_sells(
                 previous_local_positions=previous_local_positions,
                 current_local_positions=database.get_local_positions(self.db_path),
@@ -676,6 +681,47 @@ class CopyTradingEngine:
             self.db_path,
         )
         return f"Auto-sold ${sold_amount:.2f} from profitable positions to restore 20% cash."
+
+    def _liquidate_fully_priced_positions(self, settings: dict, source_positions: list[dict]) -> int:
+        positions = [
+            row
+            for row in database.list_local_positions_marked(self.db_path, source_positions=source_positions)
+            if float(row.get("shares") or 0.0) > 0
+            and float(row.get("current_price") or 0.0) >= FULLY_PRICED_EXIT_THRESHOLD
+            and float(row.get("market_value") or 0.0) >= MIN_BET_USD
+        ]
+        if not positions:
+            return 0
+
+        liquidated = 0
+        for position in positions:
+            market_value = round(float(position.get("market_value") or 0.0), 2)
+            if market_value < MIN_BET_USD:
+                continue
+            order = self.broker.execute_manual(
+                market_slug=position["market_slug"],
+                market_title=position.get("market_title"),
+                outcome=position["outcome"],
+                side="SELL",
+                price=float(position["current_price"]),
+                requested_amount_usd=market_value,
+                reason="Auto-sold fully priced position at 100c.",
+                settings=settings,
+                db_path=self.db_path,
+            )
+            order["match_strategy"] = "auto-full-price-exit"
+            database.insert_copy_order(order, self.db_path)
+            liquidated += 1
+
+        if liquidated:
+            database.log(
+                "INFO",
+                "rebalance",
+                "Auto-sold fully priced paper positions.",
+                {"positions_liquidated": liquidated, "threshold_price": FULLY_PRICED_EXIT_THRESHOLD},
+                self.db_path,
+            )
+        return liquidated
 
     def _get_leader_wallet_value(self, settings: dict, profile_wallet: str, target_positions: list[dict]) -> float:
         reference_wallet = (settings.get("leader_wallet_address") or profile_wallet or "").strip()
