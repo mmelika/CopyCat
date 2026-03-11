@@ -447,50 +447,61 @@ def portfolio_chart():
     current_value = y_values[-1]
     is_up = current_value >= baseline
     line_color = "#00c805" if is_up else "#ff5a63"
-    fill_color = "rgba(0, 200, 5, 0.18)" if is_up else "rgba(255, 90, 99, 0.18)"
+    fill_color = "rgba(0, 200, 5, 0.14)" if is_up else "rgba(255, 90, 99, 0.14)"
+    pct_deltas = [
+        round((v - baseline) / baseline * 100.0, 2) if baseline else 0.0
+        for v in y_values
+    ]
     figure = go.Figure()
+    # Baseline reference trace (drawn first so main trace can fill "tonexty")
+    figure.add_trace(
+        go.Scatter(
+            x=x_values,
+            y=[baseline] * len(y_values),
+            mode="lines",
+            line={"color": "rgba(255,255,255,0.07)", "width": 1, "dash": "dot"},
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+    # Main portfolio trace — fills to baseline, sharp line
     figure.add_trace(
         go.Scatter(
             x=x_values,
             y=y_values,
             mode="lines",
-            line={"color": line_color, "width": 3.5, "shape": "spline", "smoothing": 0.55},
-            fill="tozeroy",
+            line={"color": line_color, "width": 2, "shape": "linear"},
+            fill="tonexty",
             fillcolor=fill_color,
-            hovertemplate="%{y:$,.2f}<extra></extra>",
-        )
-    )
-    figure.add_trace(
-        go.Scatter(
-            x=x_values,
-            y=[baseline for _ in y_values],
-            mode="lines",
-            line={"color": "rgba(255,255,255,0.10)", "width": 1, "dash": "dot"},
-            hoverinfo="skip",
-            showlegend=False,
+            customdata=pct_deltas,
+            hovertemplate="<b>%{y:$,.2f}</b>  %{customdata:+.2f}%<extra></extra>",
         )
     )
     figure.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        margin={"l": 8, "r": 8, "t": 6, "b": 24},
+        margin={"l": 0, "r": 70, "t": 8, "b": 24},
         font={"color": "#6f7d8b", "family": "Manrope"},
         hovermode="x unified",
         hoverlabel={"bgcolor": "#0f1419", "bordercolor": "rgba(255,255,255,0.06)", "font": {"color": "#f5f8fb"}},
-        xaxis={"showgrid": False, "zeroline": False, "showline": False, "tickfont": {"size": 10, "color": "#7b8794"}, "ticklen": 0},
-        yaxis={"showgrid": False, "zeroline": False, "showticklabels": False, "fixedrange": True},
-    )
-    figure.add_annotation(
-        x=x_values[-1],
-        y=current_value,
-        text=fmt_signed_currency(current_value - baseline),
-        showarrow=False,
-        xanchor="left",
-        yanchor="bottom",
-        font={"color": line_color, "size": 12, "family": "IBM Plex Mono"},
-        bgcolor="rgba(9,15,21,0.92)",
-        bordercolor="rgba(255,255,255,0.06)",
-        borderpad=6,
+        xaxis={
+            "showgrid": False,
+            "zeroline": False,
+            "showline": False,
+            "tickfont": {"size": 10, "color": "#7b8794"},
+            "ticklen": 0,
+        },
+        yaxis={
+            "showgrid": True,
+            "gridcolor": "rgba(255,255,255,0.04)",
+            "zeroline": False,
+            "showticklabels": True,
+            "tickprefix": "$",
+            "tickformat": ",.0f",
+            "tickfont": {"size": 10, "color": "#7b8794", "family": "IBM Plex Mono"},
+            "side": "right",
+            "fixedrange": True,
+        },
     )
     return figure
 
