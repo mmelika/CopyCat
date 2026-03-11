@@ -29,6 +29,7 @@ app = dash.Dash(
 )
 app.title = "CopyPelosi"
 server = app.server
+MAX_HEARTBEAT_STALE_SECONDS = 30
 
 
 def parse_utc(value: str) -> datetime | None:
@@ -43,12 +44,11 @@ def parse_utc(value: str) -> datetime | None:
 def engine_runtime_status(app_state: dict, settings: dict) -> tuple[str, str, int | None]:
     engine_status = app_state.get("engine_status", "PAUSED")
     last_sync_at = parse_utc(app_state.get("last_sync_at", ""))
-    stale_after_seconds = max(int(settings.get("sync_interval_ms", 1200)) // 1000, 1) * 10 + 15
     stale_age_seconds = None
 
     if engine_status == "RUNNING" and last_sync_at is not None:
         stale_age_seconds = int((datetime.now(timezone.utc) - last_sync_at).total_seconds())
-        if stale_age_seconds > stale_after_seconds:
+        if stale_age_seconds > MAX_HEARTBEAT_STALE_SECONDS:
             return "STALE", "status-stopped", stale_age_seconds
 
     if engine_status == "RUNNING" and last_sync_at is None:
