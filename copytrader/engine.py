@@ -33,6 +33,31 @@ def _bankroll_bet_size(bankroll: float) -> float:
     return max(_round_up_to_cent(sized_amount), MIN_BET_USD)
 
 
+def _baseline_trade_size(bankroll: float) -> float:
+    bankroll = max(float(bankroll), 0.0)
+    if bankroll <= 0:
+        return 0.0
+    return max(_round_up_to_cent(bankroll * 0.01), MIN_BET_USD)
+
+
+def _copy_trade_size(local_equity: float, source_amount_usd: float, leader_wallet_value: float) -> float:
+    local_equity = max(float(local_equity), 0.0)
+    source_amount_usd = max(float(source_amount_usd), 0.0)
+    leader_wallet_value = max(float(leader_wallet_value), 0.0)
+    if local_equity <= 0:
+        return 0.0
+
+    baseline = _baseline_trade_size(local_equity)
+    if source_amount_usd <= 0 or leader_wallet_value <= 0:
+        return max(_bankroll_bet_size(local_equity), baseline)
+
+    # Mirror the leader's aggressiveness as a fraction of their wallet,
+    # but keep a small baseline so tiny source trades still place usable orders.
+    aggression_fraction = _clamp(source_amount_usd / leader_wallet_value, 0.0, 1.0)
+    scaled_amount = _round_up_to_cent(local_equity * aggression_fraction)
+    return min(max(scaled_amount, baseline), 20.0)
+
+
 @dataclass
 class CopyDecision:
     action: str
@@ -368,9 +393,8 @@ class CopyTradingEngine:
     def _decide_copy_trade(self, trade: dict, settings: dict, leader_wallet_value: float) -> CopyDecision:
         side = trade["side"]
         portfolio = database.portfolio_totals(self.db_path)
-        _ = leader_wallet_value
         local_equity = max(float(portfolio["net_value"]), 0.0)
-        requested_amount = _bankroll_bet_size(local_equity)
+        requested_amount = _copy_trade_size(local_equity, trade.get("amount_usd") or 0.0, leader_wallet_value)
 
         if side == "SELL" and not int(settings["copy_sells"]):
             return CopyDecision("skip", "Sell copying disabled.")
