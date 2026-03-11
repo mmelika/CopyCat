@@ -32,6 +32,7 @@ jobs:
             pkill -9 -f gunicorn || true
             sleep 2
             sudo systemctl start copycat copycat-engine
+            sudo systemctl restart copycat-engine
             sleep 2
             sudo systemctl is-active --quiet copycat
             sudo systemctl is-active --quiet copycat-engine
