@@ -660,9 +660,9 @@ def list_portfolio_snapshots(db_path: Path | str = DB_PATH, limit: int = 120) ->
     return [dict(row) for row in reversed(rows)]
 
 
-def portfolio_totals(db_path: Path | str = DB_PATH) -> dict:
+def portfolio_totals(db_path: Path | str = DB_PATH, source_positions: list[dict] | None = None) -> dict:
     settings = get_settings(db_path)
-    analytics = trade_analytics(db_path)
+    analytics = trade_analytics(db_path, source_positions=source_positions)
     positions = analytics["open_positions"]
     gross_exposure = round(sum(row["market_value"] for row in positions), 2)
     cash_balance = float(settings["paper_cash_balance"])
@@ -725,6 +725,24 @@ def _price_maps_from_positions(source_positions: list[dict]) -> tuple[dict[tuple
     return price_map, alias_price_map
 
 
+def fetch_live_source_positions(db_path: Path | str = DB_PATH, limit: int = 200) -> list[dict]:
+    from .polymarket import PolymarketClient
+
+    settings = get_settings(db_path)
+    app_state = get_app_state(db_path)
+    target = app_state.get("resolved_target_wallet") or settings.get("target_wallet") or settings.get("target_handle") or ""
+    if not target:
+        return list_source_positions(limit, db_path)
+
+    client = PolymarketClient()
+    try:
+        profile = client.resolve_target_wallet(target)
+        positions = client.fetch_positions(profile["wallet"], limit=limit)
+        return positions or list_source_positions(limit, db_path)
+    except Exception:
+        return list_source_positions(limit, db_path)
+
+
 def _resolve_mark_price(record: dict, price_map: dict[tuple[str, str], float], alias_price_map: dict[str, float], fallback_price: float) -> float:
     current_price = price_map.get((record.get("market_slug") or "", record.get("outcome") or ""))
     if current_price is None or current_price <= 0:
@@ -738,8 +756,8 @@ def _resolve_mark_price(record: dict, price_map: dict[tuple[str, str], float], a
     return float(current_price or 0.0)
 
 
-def list_local_positions_marked(db_path: Path | str = DB_PATH, freeze_recent_seconds: int = 0) -> list[dict]:
-    positions = [dict(row) for row in trade_analytics(db_path)["open_positions"]]
+def list_local_positions_marked(db_path: Path | str = DB_PATH, freeze_recent_seconds: int = 0, source_positions: list[dict] | None = None) -> list[dict]:
+    positions = [dict(row) for row in trade_analytics(db_path, source_positions=source_positions)["open_positions"]]
     freeze_cutoff = datetime.now(timezone.utc) - timedelta(seconds=max(int(freeze_recent_seconds), 0))
     marked = []
     for row in positions:
@@ -761,8 +779,8 @@ def list_local_positions_marked(db_path: Path | str = DB_PATH, freeze_recent_sec
     return marked
 
 
-def refresh_local_position_market_values(db_path: Path | str = DB_PATH, freeze_recent_seconds: int = 0) -> int:
-    positions = list_local_positions_marked(db_path, freeze_recent_seconds=freeze_recent_seconds)
+def refresh_local_position_market_values(db_path: Path | str = DB_PATH, freeze_recent_seconds: int = 0, source_positions: list[dict] | None = None) -> int:
+    positions = list_local_positions_marked(db_path, freeze_recent_seconds=freeze_recent_seconds, source_positions=source_positions)
     updated = 0
     for row in positions:
         market_value = round(float(row.get("market_value") or 0.0), 2)
@@ -788,10 +806,11 @@ def refresh_local_position_market_values(db_path: Path | str = DB_PATH, freeze_r
     return updated
 
 
-def trade_analytics(db_path: Path | str = DB_PATH) -> dict:
+def trade_analytics(db_path: Path | str = DB_PATH, source_positions: list[dict] | None = None) -> dict:
     orders = list_all_copy_orders(db_path)
-    price_map = _find_source_price_map(db_path)
-    alias_price_map = _find_source_price_alias_map(db_path)
+    if source_positions is None:
+        source_positions = fetch_live_source_positions(db_path)
+    price_map, alias_price_map = _price_maps_from_positions(source_positions)
     open_lots: list[dict] = []
     closed_trades: list[dict] = []
     daily_realized: dict[str, float] = {}

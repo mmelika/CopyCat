@@ -101,7 +101,8 @@ def heartbeat_label(app_state: dict, runtime_status: str, stale_age_seconds: int
 def healthz():
     settings = database.get_settings(DB_PATH)
     app_state = database.get_app_state(DB_PATH)
-    portfolio = database.portfolio_totals(DB_PATH)
+    live_positions = database.fetch_live_source_positions(DB_PATH)
+    portfolio = database.portfolio_totals(DB_PATH, live_positions)
     runtime_status, _, stale_age_seconds = engine_runtime_status(app_state, settings)
     return jsonify(
         {
@@ -128,6 +129,7 @@ def audit_profit():
     try:
         profile = client.resolve_target_wallet(target)
         live_positions = client.fetch_positions(profile["wallet"], limit=200)
+        portfolio = database.portfolio_totals(DB_PATH, live_positions)
         verification = database.live_profit_verification(live_positions, DB_PATH)
         return jsonify(
             {
@@ -657,14 +659,15 @@ def refresh_dashboard(_, trade_tab):
     settings = database.get_settings(DB_PATH)
     app_state = database.get_app_state(DB_PATH)
     runtime_status, runtime_class, stale_age_seconds = engine_runtime_status(app_state, settings)
-    source_positions = database.list_source_positions(10, DB_PATH)
+    live_positions = database.fetch_live_source_positions(DB_PATH)
+    source_positions = live_positions[:10]
     copy_orders = database.list_copy_orders(12, DB_PATH)
     sell_match_rows = database.list_sell_match_audit(12, DB_PATH)
     pending = database.list_pending_source_trades(DB_PATH)
     sync_runs = database.list_sync_runs(12, DB_PATH)
     logs = database.list_logs(14, DB_PATH)
-    portfolio = database.portfolio_totals(DB_PATH)
-    analytics = database.trade_analytics(DB_PATH)
+    portfolio = database.portfolio_totals(DB_PATH, live_positions)
+    analytics = database.trade_analytics(DB_PATH, live_positions)
     daily_performance = database.daily_portfolio_performance(DB_PATH)[:12]
     daily_realized_map = {row["date"]: row["realized_pnl"] for row in analytics["daily_realized"]}
     effective_exposure_cap = _effective_exposure_cap(settings, portfolio)

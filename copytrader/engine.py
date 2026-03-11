@@ -346,7 +346,7 @@ class CopyTradingEngine:
                 profile["handle"],
             )
             database.replace_source_positions(positions, self.db_path)
-            database.refresh_local_position_market_values(self.db_path)
+            database.refresh_local_position_market_values(self.db_path, source_positions=positions)
             trades_seen = len(trades)
             all_seen_trades = trades + synthetic_sell_trades
             trade_ids = [trade["source_trade_id"] for trade in all_seen_trades]
@@ -359,22 +359,23 @@ class CopyTradingEngine:
                 sorted(eligible_fresh_trades, key=lambda item: item["created_at"], reverse=True),
                 settings,
                 leader_wallet_value,
+                positions,
             )
             database.upsert_source_trades(all_seen_trades, self.db_path)
             self._finalize_fresh_trade_records(eligible_fresh_trades)
             self._mark_prestart_trades(prestart_trades, app_state.get("copy_start_at", ""))
-            backlog_copied, backlog_failed = self._copy_pending(settings, leader_wallet_value, app_state.get("copy_start_at", ""))
+            backlog_copied, backlog_failed = self._copy_pending(settings, leader_wallet_value, app_state.get("copy_start_at", ""), positions)
             copied += backlog_copied
             failed += backlog_failed
             copied += bootstrap_copied
-            database.refresh_local_position_market_values(self.db_path, freeze_recent_seconds=FRESH_FILL_MARK_GRACE_SECONDS)
+            database.refresh_local_position_market_values(self.db_path, freeze_recent_seconds=FRESH_FILL_MARK_GRACE_SECONDS, source_positions=positions)
             reconciliation_mismatches = self._reconcile_source_sells(
                 previous_local_positions=previous_local_positions,
                 current_local_positions=database.get_local_positions(self.db_path),
                 source_sell_trades=all_seen_trades,
                 copy_start_at=app_state.get("copy_start_at", ""),
             )
-            portfolio = database.portfolio_totals(self.db_path)
+            portfolio = database.portfolio_totals(self.db_path, positions)
             database.snapshot_portfolio(
                 portfolio["cash_balance"],
                 portfolio["gross_exposure"],
@@ -422,7 +423,8 @@ class CopyTradingEngine:
 
     def health(self) -> dict:
         app_state = database.get_app_state(self.db_path)
-        portfolio = database.portfolio_totals(self.db_path)
+        live_positions = database.fetch_live_source_positions(self.db_path)
+        portfolio = database.portfolio_totals(self.db_path, live_positions)
         return {
             "status": "ok" if app_state.get("engine_status") in {"RUNNING", "PAUSED"} else "degraded",
             "engine_status": app_state.get("engine_status"),
@@ -435,15 +437,15 @@ class CopyTradingEngine:
             "cash_balance": portfolio["cash_balance"],
         }
 
-    def _copy_trades_first(self, trades: list[dict], settings: dict, leader_wallet_value: float) -> tuple[int, int]:
+    def _copy_trades_first(self, trades: list[dict], settings: dict, leader_wallet_value: float, source_positions: list[dict]) -> tuple[int, int]:
         copied = 0
         failed = 0
         self._latest_results = []
         for trade in trades:
             liquidation_note = None
             if trade["side"] == "BUY":
-                liquidation_note = self._raise_cash_from_winners(trade, settings, leader_wallet_value)
-            decision = self._decide_copy_trade(trade, settings, leader_wallet_value)
+                liquidation_note = self._raise_cash_from_winners(trade, settings, leader_wallet_value, source_positions)
+            decision = self._decide_copy_trade(trade, settings, leader_wallet_value, source_positions)
             result = {
                 "trade_id": trade["source_trade_id"],
                 "copy_status": "skipped",
@@ -508,7 +510,7 @@ class CopyTradingEngine:
                 self.db_path,
             )
 
-    def _copy_pending(self, settings: dict, leader_wallet_value: float, copy_start_at: str) -> tuple[int, int]:
+    def _copy_pending(self, settings: dict, leader_wallet_value: float, copy_start_at: str, source_positions: list[dict]) -> tuple[int, int]:
         copied = 0
         failed = 0
         for trade in database.list_pending_source_trades(self.db_path):
@@ -522,8 +524,8 @@ class CopyTradingEngine:
                 continue
             liquidation_note = None
             if trade["side"] == "BUY":
-                liquidation_note = self._raise_cash_from_winners(trade, settings, leader_wallet_value)
-            decision = self._decide_copy_trade(trade, settings, leader_wallet_value)
+                liquidation_note = self._raise_cash_from_winners(trade, settings, leader_wallet_value, source_positions)
+            decision = self._decide_copy_trade(trade, settings, leader_wallet_value, source_positions)
             if decision.action == "skip":
                 reason = f"{decision.reason} {liquidation_note}".strip() if liquidation_note else decision.reason
                 database.mark_source_trade(trade["source_trade_id"], "skipped", last_error=reason, db_path=self.db_path)
@@ -552,9 +554,9 @@ class CopyTradingEngine:
                 database.log("ERROR", "copy", f"Copy failed for {trade['source_trade_id']}.", {"error": str(exc)}, self.db_path)
         return copied, failed
 
-    def _decide_copy_trade(self, trade: dict, settings: dict, leader_wallet_value: float) -> CopyDecision:
+    def _decide_copy_trade(self, trade: dict, settings: dict, leader_wallet_value: float, source_positions: list[dict]) -> CopyDecision:
         side = trade["side"]
-        portfolio = database.portfolio_totals(self.db_path)
+        portfolio = database.portfolio_totals(self.db_path, source_positions)
         local_equity = max(float(portfolio["net_value"]), 0.0)
         cash_balance = float(portfolio["cash_balance"])
         effective_exposure_cap = _effective_exposure_cap(settings, portfolio)
@@ -594,8 +596,8 @@ class CopyTradingEngine:
             match_strategy=match_strategy,
         )
 
-    def _raise_cash_from_winners(self, trade: dict, settings: dict, leader_wallet_value: float) -> str | None:
-        portfolio = database.portfolio_totals(self.db_path)
+    def _raise_cash_from_winners(self, trade: dict, settings: dict, leader_wallet_value: float, source_positions: list[dict]) -> str | None:
+        portfolio = database.portfolio_totals(self.db_path, source_positions)
         effective_exposure_cap = _effective_exposure_cap(settings, portfolio)
         remaining_exposure = round(effective_exposure_cap - portfolio["gross_exposure"], 2)
         if remaining_exposure < MIN_BET_USD:
@@ -621,7 +623,7 @@ class CopyTradingEngine:
 
         profitable_positions = [
             row
-            for row in database.list_local_positions_marked(self.db_path)
+            for row in database.list_local_positions_marked(self.db_path, source_positions=source_positions)
             if float(row.get("shares") or 0.0) > 0 and float(row.get("unrealized_pnl") or 0.0) > 0 and float(row.get("current_price") or 0.0) > 0
         ]
         profitable_positions.sort(
@@ -661,7 +663,7 @@ class CopyTradingEngine:
         if not sold_orders:
             return "No profitable position large enough to free cash."
 
-        database.refresh_local_position_market_values(self.db_path, freeze_recent_seconds=FRESH_FILL_MARK_GRACE_SECONDS)
+        database.refresh_local_position_market_values(self.db_path, freeze_recent_seconds=FRESH_FILL_MARK_GRACE_SECONDS, source_positions=source_positions)
         sold_amount = round(sum(float(order["requested_amount_usd"]) for order in sold_orders), 2)
         sold_labels = ", ".join(f"{order['market_slug']} {order['outcome']}" for order in sold_orders[:3])
         if len(sold_orders) > 3:
@@ -713,7 +715,7 @@ class CopyTradingEngine:
         if not positions or leader_wallet_value <= 0:
             return 0
 
-        portfolio = database.portfolio_totals(self.db_path)
+        portfolio = database.portfolio_totals(self.db_path, positions)
         remaining_cash = float(portfolio["cash_balance"])
         effective_exposure_cap = _effective_exposure_cap(settings, portfolio)
         remaining_exposure = round(effective_exposure_cap - float(portfolio["gross_exposure"]), 2)
