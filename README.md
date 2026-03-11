@@ -32,7 +32,9 @@ PORT=8060 python3 app.py
 This repo includes:
 
 - [wsgi.py](/Users/marco/Documents/AI Shit/CopyPelosi/wsgi.py) for Gunicorn
-- [deploy/copycat.service](/Users/marco/Documents/AI Shit/CopyPelosi/deploy/copycat.service) for `systemd`
+- [run_engine.py](/Users/marco/Documents/AI Shit/CopyPelosi/run_engine.py) for the standalone sync worker
+- [deploy/copycat.service](/Users/marco/Documents/AI Shit/CopyPelosi/deploy/copycat.service) for the web UI `systemd` unit
+- [deploy/copycat-engine.service](/Users/marco/Documents/AI Shit/CopyPelosi/deploy/copycat-engine.service) for the sync worker `systemd` unit
 - [deploy/nginx-copycat.conf](/Users/marco/Documents/AI Shit/CopyPelosi/deploy/nginx-copycat.conf) for Nginx
 - [deploy/bootstrap_ec2.sh](/Users/marco/Documents/AI Shit/CopyPelosi/deploy/bootstrap_ec2.sh) to install and start the app on Ubuntu EC2
 
@@ -69,5 +71,6 @@ Suggested daily cron on the server:
 ## Notes
 
 - Persistence lives in [data/copytrader.db](/Users/marco/Documents/AI Shit/CopyPelosi/data/copytrader.db) after the first run.
+- On EC2, run the web UI and sync engine as separate services. The web app should not own the long-lived poller.
 - The current execution adapter is paper-only. The backend is split so a real account executor can replace `PaperBroker` in [copytrader/engine.py](/Users/marco/Documents/AI Shit/CopyPelosi/copytrader/engine.py).
 - Public Polymarket endpoints can change. The client in [copytrader/polymarket.py](/Users/marco/Documents/AI Shit/CopyPelosi/copytrader/polymarket.py) tries multiple public API shapes and fails gracefully into logs if resolution or fetches break.

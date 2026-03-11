@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 import os
 
 import dash
@@ -14,8 +14,6 @@ from copytrader.engine import CopyTradingEngine
 
 
 database.init_db(DB_PATH)
-engine = CopyTradingEngine(DB_PATH)
-engine.start()
 
 base_path = os.environ.get("DASH_URL_BASE_PATHNAME", "/").strip() or "/"
 if not base_path.startswith("/"):
@@ -33,9 +31,50 @@ app.title = "CopyPelosi"
 server = app.server
 
 
+def parse_utc(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def engine_runtime_status(app_state: dict, settings: dict) -> tuple[str, str, int | None]:
+    engine_status = app_state.get("engine_status", "PAUSED")
+    last_sync_at = parse_utc(app_state.get("last_sync_at", ""))
+    stale_after_seconds = max(int(settings.get("sync_interval_ms", 1200)) // 1000, 1) * 10 + 15
+    stale_age_seconds = None
+
+    if engine_status == "RUNNING" and last_sync_at is not None:
+        stale_age_seconds = int((datetime.now(timezone.utc) - last_sync_at).total_seconds())
+        if stale_age_seconds > stale_after_seconds:
+            return "STALE", "status-stopped", stale_age_seconds
+
+    if engine_status == "RUNNING" and last_sync_at is None:
+        return "STARTING", "status-running", None
+
+    return engine_status, status_class(engine_status), stale_age_seconds
+
+
 @server.get("/healthz")
 def healthz():
-    return jsonify(engine.health()), 200
+    settings = database.get_settings(DB_PATH)
+    app_state = database.get_app_state(DB_PATH)
+    portfolio = database.portfolio_totals(DB_PATH)
+    runtime_status, _, stale_age_seconds = engine_runtime_status(app_state, settings)
+    return jsonify(
+        {
+            "status": "degraded" if runtime_status == "STALE" else ("ok" if app_state.get("engine_status") in {"RUNNING", "PAUSED"} else "degraded"),
+            "engine_status": app_state.get("engine_status"),
+            "runtime_status": runtime_status,
+            "last_sync_at": app_state.get("last_sync_at"),
+            "stale_age_seconds": stale_age_seconds,
+            "last_error": app_state.get("last_error"),
+            "net_value": portfolio["net_value"],
+            "cash_balance": portfolio["cash_balance"],
+        }
+    ), 200
 
 
 def fmt_currency(value) -> str:
@@ -366,6 +405,7 @@ def portfolio_chart():
 def refresh_dashboard(_, trade_tab):
     settings = database.get_settings(DB_PATH)
     app_state = database.get_app_state(DB_PATH)
+    runtime_status, runtime_class, stale_age_seconds = engine_runtime_status(app_state, settings)
     source_positions = database.list_source_positions(10, DB_PATH)
     copy_orders = database.list_copy_orders(12, DB_PATH)
     pending = database.list_pending_source_trades(DB_PATH)
@@ -466,7 +506,12 @@ def refresh_dashboard(_, trade_tab):
                 className="analysis-block",
                 children=[
                     html.Div("Sync Status", className="analysis-label"),
-                    html.Div(app_state["last_sync_message"], className="analysis-text"),
+                    html.Div(
+                        app_state["last_sync_message"]
+                        if runtime_status != "STALE"
+                        else f"No sync heartbeat for {stale_age_seconds}s while engine is marked RUNNING.",
+                        className="analysis-text",
+                    ),
                 ],
             ),
             html.Div(
@@ -516,11 +561,15 @@ def refresh_dashboard(_, trade_tab):
         ],
     )
 
+    refresh_text = f"Last sync: {app_state['last_sync_at'][11:19] if app_state['last_sync_at'] else 'never'}"
+    if runtime_status == "STALE":
+        refresh_text = f"Heartbeat stale: {stale_age_seconds}s"
+
     return (
-        app_state["engine_status"],
-        status_class(app_state["engine_status"]),
+        runtime_status,
+        runtime_class,
         "Pause" if app_state["engine_status"] == "RUNNING" else "Resume",
-        f"Last sync: {app_state['last_sync_at'][11:19] if app_state['last_sync_at'] else 'never'}",
+        refresh_text,
         datetime.now().strftime("%b %d, %Y %H:%M:%S"),
         target_label,
         target_wallet,
@@ -643,7 +692,9 @@ def save_settings(_, target_handle, target_wallet, leader_wallet, copy_ratio, ma
 )
 def toggle_engine(_):
     current = database.get_app_state(DB_PATH)["engine_status"]
-    engine.set_running(current != "RUNNING")
+    next_status = "RUNNING" if current != "RUNNING" else "PAUSED"
+    database.set_app_state("engine_status", next_status, DB_PATH)
+    database.log("INFO", "engine", f"Engine set to {next_status}.", db_path=DB_PATH)
     return 0
 
 
@@ -653,7 +704,7 @@ def toggle_engine(_):
     prevent_initial_call=True,
 )
 def force_sync(_):
-    engine.tick(force=True)
+    CopyTradingEngine(DB_PATH).tick(force=True)
     return 0
 
 
