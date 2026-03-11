@@ -680,73 +680,51 @@ def portfolio_chart():
 
 
 @app.callback(
+    # Topbar
     Output("status-pill", "children"),
     Output("status-pill", "className"),
     Output("toggle-engine-btn", "children"),
-    Output("refresh-text", "children"),
-    Output("clock", "children"),
-    Output("hero-nav", "children"),
-    Output("hero-return-chip", "children"),
-    Output("hero-return-chip", "className"),
-    Output("hero-subtitle", "children"),
-    Output("hero-cash", "children"),
-    Output("hero-cash-sub", "children"),
-    Output("hero-exposure", "children"),
-    Output("hero-exposure-chip", "children"),
-    Output("hero-exposure-chip", "className"),
-    Output("hero-exposure-sub", "children"),
-    Output("hero-fill-rate", "children"),
-    Output("hero-fill-sub", "children"),
-    Output("hero-open-positions", "children"),
-    Output("hero-open-sub", "children"),
-    Output("signal-runtime", "children"),
-    Output("signal-summary", "children"),
-    Output("signal-trader", "children"),
-    Output("signal-wallet", "children"),
-    Output("signal-heartbeat", "children"),
-    Output("signal-cadence", "children"),
-    Output("signal-leader-nav", "children"),
-    Output("signal-pending", "children"),
-    Output("pulse-daily-realized", "children"),
-    Output("pulse-daily-realized-sub", "children"),
-    Output("pulse-daily-realized-chip", "children"),
-    Output("pulse-daily-realized-chip", "className"),
-    Output("pulse-unrealized", "children"),
-    Output("pulse-unrealized-sub", "children"),
-    Output("pulse-unrealized-chip", "children"),
-    Output("pulse-unrealized-chip", "className"),
-    Output("pulse-copied-notional", "children"),
-    Output("pulse-copied-sub", "children"),
-    Output("pulse-sync-health", "children"),
-    Output("pulse-sync-sub", "children"),
-    Output("pulse-sync-chip", "children"),
-    Output("pulse-sync-chip", "className"),
-    Output("source-positions-badge", "children"),
-    Output("source-positions-table", "children"),
+    Output("sync-latency-chip", "children"),
+    # Stats strip
+    Output("stat-nav", "children"),
+    Output("stat-invested", "children"),
+    Output("stat-unrealized", "children"),
+    Output("stat-unrealized", "className"),
+    Output("stat-fill-rate", "children"),
+    Output("stat-open-count", "children"),
+    # Live — Leader column
+    Output("live-leader-title", "children"),
+    Output("live-leader-meta", "children"),
+    Output("live-source-positions-table", "children"),
+    Output("live-trades-title", "children"),
+    Output("live-trades-meta", "children"),
+    Output("live-source-trades-table", "children"),
+    # Live — Copies column
+    Output("live-copies-title", "children"),
+    Output("live-copies-meta", "children"),
+    Output("live-open-positions-table", "children"),
+    Output("live-orders-title", "children"),
+    Output("live-orders-meta", "children"),
+    Output("live-copy-orders-table", "children"),
+    # Portfolio tab
     Output("portfolio-chart", "figure"),
     Output("daily-performance-badge", "children"),
     Output("daily-performance-table", "children"),
+    # History tab
+    Output("closed-trades-badge", "children"),
+    Output("closed-trades-table", "children"),
     Output("sync-history-badge", "children"),
     Output("sync-history-table", "children"),
-    Output("copied-trades-badge", "children"),
-    Output("copied-trades-table", "children"),
-    Output("trade-book-badge", "children"),
-    Output("trade-book-table", "children"),
-    Output("analysis-panel", "children"),
-    Output("engine-log-badge", "children"),
-    Output("engine-log-table", "children"),
     Input("refresh-interval", "n_intervals"),
-    Input("trade-tabs", "value"),
 )
-def refresh_dashboard(_, trade_tab):
+def refresh_dashboard(_):
     settings = database.get_settings(DB_PATH)
     app_state = database.get_app_state(DB_PATH)
     runtime_status, runtime_class, stale_age_seconds = engine_runtime_status(app_state, settings)
     source_positions = database.list_source_positions(10, DB_PATH)
+    source_trades = database.list_source_trades(10, DB_PATH)
     copy_orders = database.list_copy_orders(12, DB_PATH)
-    pending = database.list_pending_source_trades(DB_PATH)
     sync_runs = database.list_sync_runs(12, DB_PATH)
-    logs = database.list_logs(14, DB_PATH)
     portfolio = database.portfolio_totals(DB_PATH)
     analytics = database.trade_analytics(DB_PATH)
     daily_performance = database.daily_portfolio_performance(DB_PATH)[:12]
@@ -754,221 +732,87 @@ def refresh_dashboard(_, trade_tab):
     open_trades = analytics["open_trades"]
     closed_trades = analytics["closed_trades"]
 
-    copied_notional = sum(row["requested_amount_usd"] for row in copy_orders if row["status"] == "FILLED")
     filled_orders = [row for row in copy_orders if row["status"] == "FILLED"]
-    latest_daily = daily_performance[0] if daily_performance else None
-    daily_realized = float(daily_realized_map.get(latest_daily["date"], 0.0)) if latest_daily else 0.0
-    unrealized_total = sum(float(row["unrealized_pnl"]) for row in open_trades)
-    exposure_cap = float(settings["max_total_exposure_usd"] or 0.0)
-    gross_exposure = float(portfolio["gross_exposure"] or 0.0)
-    exposure_usage = (gross_exposure / exposure_cap * 100.0) if exposure_cap > 0 else 0.0
     fill_rate = (len(filled_orders) / len(copy_orders) * 100.0) if copy_orders else 0.0
-    sync_success_count = len([row for row in sync_runs if row["status"] == "SUCCESS"])
-    sync_success_rate = (sync_success_count / len(sync_runs) * 100.0) if sync_runs else 0.0
+    unrealized_total = sum(float(row["unrealized_pnl"]) for row in open_trades)
+    gross_exposure = float(portfolio["gross_exposure"] or 0.0)
     latest_sync = sync_runs[0] if sync_runs else None
-    latest_latency = f"{latest_sync['latency_ms']}ms" if latest_sync and latest_sync.get("latency_ms") is not None else "-"
+    latest_latency_ms = latest_sync["latency_ms"] if latest_sync and latest_sync.get("latency_ms") is not None else None
+    latency_chip = f"{latest_latency_ms}ms" if latest_latency_ms is not None else "—"
+    target_label = f"@{settings['target_handle']}" if settings["target_handle"] else "Wallet target"
+    target_wallet = app_state.get("resolved_target_wallet") or settings["target_wallet"] or "Not resolved"
 
-    source_position_rows = [
-        [
-            short_text(row["market_title"], 36),
-            row["outcome"],
-            fmt_number(row["shares"], 2),
-            fmt_currency(row["notional_usd"]),
-            fmt_number(row["price"], 3),
-        ]
+    source_pos_rows = [
+        [short_text(row["market_title"], 34), row["outcome"], fmt_number(row["shares"], 2), fmt_currency(row["notional_usd"]), fmt_number(row["price"], 3)]
         for row in source_positions
-    ] or [["No source positions yet", "-", "-", "-", "-"]]
-    copied_trade_rows = [
-        [
-            fmt_pacific_time(row["created_at"]),
-            short_text(row["market_title"], 34),
-            row["outcome"],
-            row["side"],
-            fmt_currency(row["requested_amount_usd"]),
-            fmt_number(row["executed_price"], 3),
-            row["status"],
-        ]
-        for row in copy_orders
-    ] or [["No copied trades yet", "-", "-", "-", "-", "-", "-"]]
-    daily_rows = [
-        [
-            row["date"],
-            fmt_signed_currency(row["day_change"]),
-            fmt_signed_currency(daily_realized_map.get(row["date"], 0.0)),
-            fmt_currency(row["net_value"]),
-        ]
-        for row in daily_performance
-    ] or [["No daily performance yet", "-", "-", "-"]]
-    open_trade_rows = [
-        [
-            short_text(row["market_title"], 30),
-            row["outcome"],
-            fmt_number(row["shares"], 2),
-            fmt_currency(row["cost_basis"]),
-            fmt_currency(row["market_value"]),
-            fmt_signed_currency(row["unrealized_pnl"]),
-        ]
+    ] or [["No source positions", "-", "-", "-", "-"]]
+
+    source_trade_rows = [
+        [fmt_pacific_time(row["created_at"]), short_text(row["market_title"], 28), row["outcome"], row["side"], fmt_currency(row["notional_usd"])]
+        for row in source_trades
+    ] or [["No leader trades yet", "-", "-", "-", "-"]]
+
+    open_rows = [
+        [short_text(row["market_title"], 30), row["outcome"], fmt_number(row["shares"], 2), fmt_currency(row["cost_basis"]), fmt_currency(row["market_value"]), fmt_signed_currency(row["unrealized_pnl"])]
         for row in open_trades[:20]
-    ] or [["No open trades", "-", "-", "-", "-", "-"]]
-    closed_trade_rows = [
-        [
-            fmt_pacific_time(row["exit_time"]),
-            short_text(row["market_title"], 26),
-            row["outcome"],
-            fmt_number(row["shares"], 2),
-            fmt_currency(row["cost_basis"]),
-            fmt_currency(row["proceeds"]),
-            fmt_signed_currency(row["pnl"]),
-        ]
+    ] or [["No open positions", "-", "-", "-", "-", "-"]]
+
+    copy_order_rows = [
+        [fmt_pacific_time(row["created_at"]), short_text(row["market_title"], 26), row["outcome"], row["side"], fmt_currency(row["requested_amount_usd"]), fmt_number(row["executed_price"], 3), row["status"]]
+        for row in copy_orders
+    ] or [["No copy orders yet", "-", "-", "-", "-", "-", "-"]]
+
+    closed_rows = [
+        [fmt_pacific_time(row["exit_time"]), short_text(row["market_title"], 24), row["outcome"], fmt_number(row["shares"], 2), fmt_currency(row["cost_basis"]), fmt_currency(row["proceeds"]), fmt_signed_currency(row["pnl"])]
         for row in closed_trades[:20]
     ] or [["No closed trades", "-", "-", "-", "-", "-", "-"]]
-    trade_book_table = (
-        render_table(["Market", "Outcome", "Shares", "Cost", "Value", "P/L"], open_trade_rows)
-        if trade_tab == "open-trades"
-        else render_table(["Sold At (PT)", "Market", "Outcome", "Shares", "Cost", "Proceeds", "P/L"], closed_trade_rows)
-    )
-    trade_book_count = len(open_trades) if trade_tab == "open-trades" else len(closed_trades)
+
+    daily_rows = [
+        [row["date"], fmt_signed_currency(row["day_change"]), fmt_signed_currency(daily_realized_map.get(row["date"], 0.0)), fmt_currency(row["net_value"])]
+        for row in daily_performance
+    ] or [["No daily data", "-", "-", "-"]]
+
     sync_rows = [
-        [
-            fmt_pacific_time(row["started_at"]),
-            row["status"],
-            str(row["trades_seen"]),
-            str(row["new_trades"]),
-            str(row["copied"]),
-            f"{row['latency_ms']}ms",
-        ]
+        [fmt_pacific_time(row["started_at"]), row["status"], str(row["trades_seen"]), str(row["new_trades"]), str(row["copied"]), f"{row['latency_ms']}ms"]
         for row in sync_runs
     ] or [["-", "-", "-", "-", "-", "-"]]
-    log_rows = [
-        [
-            fmt_pacific_time(row["ts"]),
-            row["level"],
-            row["component"],
-            row["message"][:48],
-        ]
-        for row in logs
-    ] or [["-", "-", "-", "-"]]
-
-    target_label = f"@{settings['target_handle']}" if settings["target_handle"] else "Wallet target"
-    target_wallet = app_state.get("resolved_target_wallet") or settings["target_wallet"] or "Not resolved yet"
-    heartbeat = heartbeat_label(app_state, runtime_status, stale_age_seconds)
-    analysis = html.Div(
-        className="analysis-stack",
-        children=[
-            html.Div(
-                className="analysis-block",
-                children=[
-                    html.Div("Execution Posture", className="analysis-label"),
-                    html.Div(
-                        app_state["last_sync_message"]
-                        if runtime_status != "STALE"
-                        else f"No sync heartbeat for {stale_age_seconds}s while engine is marked RUNNING.",
-                        className="analysis-text",
-                    ),
-                ],
-            ),
-            html.Div(
-                className="analysis-block",
-                children=[
-                    html.Div("Account Mirror", className="analysis-label"),
-                    html.Div(f"{target_label} resolved to {target_wallet}.", className="analysis-text"),
-                ],
-            ),
-            html.Div(
-                className="analysis-block",
-                children=[
-                    html.Div("Copy Configuration", className="analysis-label"),
-                    html.Div(
-                        f"Polling every {settings['sync_interval_ms']}ms, fetch depth {settings['trade_fetch_limit']}, "
-                        f"slippage cap {settings['slippage_bps']} bps, sells {'on' if int(settings['copy_sells']) else 'off'}.",
-                        className="analysis-text",
-                    ),
-                ],
-            ),
-            html.Div(
-                className="analysis-block",
-                children=[
-                    html.Div("Risk Budget", className="analysis-label"),
-                    html.Div(
-                        f"{fmt_currency(gross_exposure)} deployed against a {fmt_currency(exposure_cap)} cap "
-                        f"({exposure_usage:.1f}% used). Cash available is {fmt_currency(portfolio['cash_balance'])}.",
-                        className="analysis-text",
-                    ),
-                ],
-            ),
-            html.Div(
-                className="analysis-block",
-                children=[
-                    html.Div("Operational Risk", className="analysis-label"),
-                    html.Div(
-                        app_state["last_error"] or f"Recent sync success rate is {sync_success_rate:.0f}% with latest latency {latest_latency}.",
-                        className="analysis-text",
-                    ),
-                ],
-            ),
-        ],
-    )
-
-    refresh_text = f"Last sync: {fmt_pacific_time(app_state['last_sync_at']) if app_state['last_sync_at'] else 'never'}"
-    net_gain = float(portfolio["total_gain"])
-    net_chip_text = f"{portfolio['total_gain_pct']:+.2f}%"
 
     return (
-        heartbeat,
+        # Topbar
+        runtime_status,
         runtime_class,
         "Pause" if app_state["engine_status"] == "RUNNING" else "Resume",
-        refresh_text,
-        fmt_pacific_clock(),
+        latency_chip,
+        # Stats strip
         fmt_currency(portfolio["net_value"]),
-        net_chip_text,
-        f"hero-return-chip {signed_class(net_gain)}",
-        f"{fmt_signed_currency(net_gain)} since inception. Tracking {target_label} with {len(open_trades)} open positions.",
-        fmt_currency(portfolio["cash_balance"]),
-        f"{(float(portfolio['cash_balance']) / float(portfolio['net_value']) * 100.0):.1f}% of NAV is unallocated" if float(portfolio["net_value"]) else "No capital available",
         fmt_currency(gross_exposure),
-        f"{exposure_usage:.1f}%",
-        f"stat-chip {signed_class(exposure_cap - gross_exposure if exposure_cap else 0)}",
-        f"Cap {fmt_currency(exposure_cap)}",
+        fmt_signed_currency(unrealized_total),
+        f"stats-strip-value {signed_class(unrealized_total)}",
         f"{fill_rate:.0f}%",
-        f"{len(filled_orders)} filled from {len(copy_orders)} copy attempts",
         str(len(open_trades)),
-        f"{len(closed_trades)} trades have been closed",
-        runtime_status,
-        app_state["last_sync_message"] if runtime_status != "STALE" else f"Engine marked RUNNING but heartbeat is stale by {stale_age_seconds}s.",
+        # Live — Leader
         target_label,
-        target_wallet,
-        heartbeat,
-        f"{settings['sync_interval_ms']} ms",
-        fmt_currency(float(app_state.get("leader_wallet_value") or 0.0)),
-        str(len(pending)),
-        fmt_signed_currency(daily_realized),
-        latest_daily["date"] if latest_daily else "No realized activity yet",
-        fmt_signed_currency(daily_realized),
-        f"stat-chip {signed_class(daily_realized)}",
-        fmt_signed_currency(unrealized_total),
-        f"Across {len(open_trades)} active positions",
-        fmt_signed_currency(unrealized_total),
-        f"stat-chip {signed_class(unrealized_total)}",
-        fmt_currency(copied_notional),
-        f"{len(filled_orders)} fills from the latest {len(copy_orders)} copy orders",
-        f"{sync_success_rate:.0f}%",
-        f"{len(sync_runs)} recent sync runs. Latest latency {latest_latency}.",
-        f"{sync_success_rate:.0f}%",
-        f"stat-chip {signed_class(sync_success_rate - 90)}",
-        str(len(source_positions)),
-        render_table(["Market", "Outcome", "Shares", "Value", "Price"], source_position_rows),
+        short_text(target_wallet, 22),
+        render_table(["Market", "Outcome", "Shares", "Value", "Price"], source_pos_rows),
+        "Recent Trades",
+        f"{len(source_trades)} recent",
+        render_table(["Time (PT)", "Market", "Outcome", "Side", "USD"], source_trade_rows),
+        # Live — Copies
+        "Paper Portfolio",
+        f"{fill_rate:.0f}% fill rate",
+        render_table(["Market", "Outcome", "Shares", "Cost", "Value", "P/L"], open_rows),
+        "Recent Orders",
+        f"{len(filled_orders)} filled",
+        render_table(["Time (PT)", "Market", "Outcome", "Side", "USD", "Px", "Status"], copy_order_rows),
+        # Portfolio tab
         portfolio_chart(),
         str(len(daily_performance)),
         render_table(["Date", "Day Change", "Closed P/L", "Portfolio"], daily_rows),
+        # History tab
+        str(len(closed_trades)),
+        render_table(["Exit (PT)", "Market", "Outcome", "Shares", "Cost", "Proceeds", "P/L"], closed_rows),
         str(len(sync_runs)),
         render_table(["Time (PT)", "Status", "Seen", "New", "Copied", "Latency"], sync_rows),
-        str(len(copy_orders)),
-        render_table(["Completed At (PT)", "Market", "Outcome", "Side", "USD", "Px", "Status"], copied_trade_rows),
-        str(trade_book_count),
-        trade_book_table,
-        analysis,
-        str(len(logs)),
-        render_table(["Time (PT)", "Level", "Comp", "Message"], log_rows),
     )
 
 
