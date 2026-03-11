@@ -209,7 +209,17 @@ class PolymarketClient:
             shares = _to_float(item.get("shares") or item.get("size") or item.get("quantity"), 0.0)
             if shares <= 0:
                 continue
-            price = _to_float(item.get("price") or item.get("avgPrice") or item.get("currentValue"), 0.0)
+            notional_usd = _to_float(
+                item.get("currentValue")
+                or item.get("amount")
+                or item.get("amountUsd")
+                or item.get("value"),
+                0.0,
+            )
+            explicit_price = _to_float(item.get("price") or item.get("avgPrice") or item.get("outcomePrice"), 0.0)
+            price = explicit_price
+            if price <= 0 and notional_usd > 0 and shares > 0:
+                price = round(notional_usd / shares, 6)
             market_slug = item.get("marketSlug") or item.get("slug") or item.get("conditionId") or "unknown-market"
             outcome = item.get("outcome") or item.get("token") or item.get("outcomeName") or "UNKNOWN"
             side = "BUY"
@@ -223,13 +233,7 @@ class PolymarketClient:
                     "side": side,
                     "price": price,
                     "shares": shares,
-                    "notional_usd": _to_float(
-                        item.get("currentValue")
-                        or item.get("amount")
-                        or item.get("amountUsd")
-                        or item.get("value"),
-                        round(shares * price, 4),
-                    ),
+                    "notional_usd": notional_usd if notional_usd > 0 else round(shares * price, 4),
                     "updated_at": _iso(item.get("updatedAt") or item.get("timestamp")),
                     "condition_id": _clean_id(item.get("conditionId") or item.get("condition_id") or item.get("marketId")),
                     "token_id": _clean_id(item.get("asset") or item.get("tokenId") or item.get("token_id") or item.get("outcomeTokenId")),
