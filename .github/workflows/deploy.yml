@@ -28,5 +28,6 @@ jobs:
             . .venv/bin/activate
             pip install --upgrade pip
             pip install -r requirements.txt
-            sudo systemctl restart copycat
+            sudo systemctl restart copycat copycat-engine
             sudo systemctl is-active --quiet copycat
+            sudo systemctl is-active --quiet copycat-engine
