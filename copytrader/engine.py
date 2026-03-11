@@ -19,6 +19,7 @@ MIN_CASH_RESERVE_PCT = 0.20
 MAX_SINGLE_BET_CASH_PCT = 0.20
 MAX_TRADE_FETCH_LIMIT = 10
 BUY_REPLAY_GUARD_SECONDS = 15
+FRESH_FILL_MARK_GRACE_SECONDS = 5
 
 
 def _clamp(value: float, lower: float, upper: float) -> float:
@@ -354,7 +355,7 @@ class CopyTradingEngine:
             copied += backlog_copied
             failed += backlog_failed
             copied += bootstrap_copied
-            database.refresh_local_position_market_values(self.db_path)
+            database.refresh_local_position_market_values(self.db_path, freeze_recent_seconds=FRESH_FILL_MARK_GRACE_SECONDS)
             reconciliation_mismatches = self._reconcile_source_sells(
                 previous_local_positions=previous_local_positions,
                 current_local_positions=database.get_local_positions(self.db_path),
@@ -646,7 +647,7 @@ class CopyTradingEngine:
         if not sold_orders:
             return "No profitable position large enough to free cash."
 
-        database.refresh_local_position_market_values(self.db_path)
+        database.refresh_local_position_market_values(self.db_path, freeze_recent_seconds=FRESH_FILL_MARK_GRACE_SECONDS)
         sold_amount = round(sum(float(order["requested_amount_usd"]) for order in sold_orders), 2)
         sold_labels = ", ".join(f"{order['market_slug']} {order['outcome']}" for order in sold_orders[:3])
         if len(sold_orders) > 3:

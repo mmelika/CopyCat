@@ -4,7 +4,7 @@ import json
 import re
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -24,6 +24,18 @@ def pacific_day(value: str) -> str:
         return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(PACIFIC_TZ).strftime("%Y-%m-%d")
     except ValueError:
         return ""
+
+
+def _parse_utc(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _json(value):
@@ -695,23 +707,28 @@ def _find_source_price_alias_map(db_path: Path | str = DB_PATH) -> dict[str, flo
     return prices
 
 
-def list_local_positions_marked(db_path: Path | str = DB_PATH) -> list[dict]:
+def list_local_positions_marked(db_path: Path | str = DB_PATH, freeze_recent_seconds: int = 0) -> list[dict]:
     positions = get_local_positions(db_path)
     price_map = _find_source_price_map(db_path)
     alias_price_map = _find_source_price_alias_map(db_path)
+    freeze_cutoff = datetime.now(timezone.utc) - timedelta(seconds=max(int(freeze_recent_seconds), 0))
     marked = []
     for row in positions:
-        current_price = price_map.get((row.get("market_slug") or "", row.get("outcome") or ""))
-        if current_price is None or current_price <= 0:
-            for alias in _position_aliases(row):
-                aliased_price = alias_price_map.get(alias)
-                if aliased_price and aliased_price > 0:
-                    current_price = aliased_price
-                    break
-        if current_price is None or current_price <= 0:
-            current_price = float(row.get("avg_price") or 0.0)
         shares = float(row.get("shares") or 0.0)
         avg_price = float(row.get("avg_price") or 0.0)
+        updated_at = _parse_utc(row.get("updated_at") or "")
+        if updated_at is not None and updated_at >= freeze_cutoff:
+            current_price = avg_price
+        else:
+            current_price = price_map.get((row.get("market_slug") or "", row.get("outcome") or ""))
+            if current_price is None or current_price <= 0:
+                for alias in _position_aliases(row):
+                    aliased_price = alias_price_map.get(alias)
+                    if aliased_price and aliased_price > 0:
+                        current_price = aliased_price
+                        break
+            if current_price is None or current_price <= 0:
+                current_price = avg_price
         market_value = round(shares * current_price, 2)
         cost_basis = round(shares * avg_price, 2)
         marked_row = dict(row)
@@ -728,8 +745,8 @@ def list_local_positions_marked(db_path: Path | str = DB_PATH) -> list[dict]:
     return marked
 
 
-def refresh_local_position_market_values(db_path: Path | str = DB_PATH) -> int:
-    positions = list_local_positions_marked(db_path)
+def refresh_local_position_market_values(db_path: Path | str = DB_PATH, freeze_recent_seconds: int = 0) -> int:
+    positions = list_local_positions_marked(db_path, freeze_recent_seconds=freeze_recent_seconds)
     updated = 0
     for row in positions:
         market_value = round(float(row.get("market_value") or 0.0), 2)
