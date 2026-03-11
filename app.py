@@ -12,6 +12,7 @@ from dash import Input, Output, State, callback_context, dcc, html
 from copytrader import database
 from copytrader.config import DB_PATH
 from copytrader.engine import CopyTradingEngine, _effective_exposure_cap
+from copytrader.polymarket import PolymarketClient
 
 
 database.init_db(DB_PATH)
@@ -114,6 +115,42 @@ def healthz():
             "cash_balance": portfolio["cash_balance"],
         }
     ), 200
+
+
+@server.get("/audit/profit")
+def audit_profit():
+    settings = database.get_settings(DB_PATH)
+    app_state = database.get_app_state(DB_PATH)
+    portfolio = database.portfolio_totals(DB_PATH)
+    target = settings.get("target_wallet") or settings.get("target_handle") or app_state.get("resolved_target_wallet") or ""
+    client = PolymarketClient()
+
+    try:
+        profile = client.resolve_target_wallet(target)
+        live_positions = client.fetch_positions(profile["wallet"], limit=200)
+        verification = database.live_profit_verification(live_positions, DB_PATH)
+        return jsonify(
+            {
+                "status": "ok" if verification["verified"] else "warning",
+                "target_wallet": profile["wallet"],
+                "target_handle": profile.get("handle") or settings.get("target_handle") or "",
+                "server_net_value": portfolio["net_value"],
+                "server_cash_balance": portfolio["cash_balance"],
+                "server_marked_positions": portfolio["gross_exposure"],
+                "polymarket_verification": verification,
+            }
+        ), 200
+    except Exception as exc:
+        return jsonify(
+            {
+                "status": "error",
+                "error": str(exc),
+                "target_wallet": target,
+                "server_net_value": portfolio["net_value"],
+                "server_cash_balance": portfolio["cash_balance"],
+                "server_marked_positions": portfolio["gross_exposure"],
+            }
+        ), 500
 
 
 def fmt_currency(value) -> str:

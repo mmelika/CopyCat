@@ -707,6 +707,23 @@ def _find_source_price_alias_map(db_path: Path | str = DB_PATH) -> dict[str, flo
     return prices
 
 
+def _price_maps_from_positions(source_positions: list[dict]) -> tuple[dict[tuple[str, str], float], dict[str, float]]:
+    price_map: dict[tuple[str, str], float] = {}
+    alias_price_map: dict[str, float] = {}
+    for row in source_positions or []:
+        try:
+            price = float(row.get("price") or 0.0)
+        except (TypeError, ValueError):
+            price = 0.0
+        key = (row.get("market_slug") or "", row.get("outcome") or "")
+        price_map[key] = price
+        if price <= 0:
+            continue
+        for alias in _position_aliases(row):
+            alias_price_map[alias] = price
+    return price_map, alias_price_map
+
+
 def _resolve_mark_price(record: dict, price_map: dict[tuple[str, str], float], alias_price_map: dict[str, float], fallback_price: float) -> float:
     current_price = price_map.get((record.get("market_slug") or "", record.get("outcome") or ""))
     if current_price is None or current_price <= 0:
@@ -874,6 +891,149 @@ def trade_analytics(db_path: Path | str = DB_PATH) -> dict:
         "open_trades": open_lots,
         "closed_trades": closed_trades,
         "daily_realized": daily_rows,
+    }
+
+
+def profit_verification(db_path: Path | str = DB_PATH) -> dict:
+    settings = get_settings(db_path)
+    portfolio = portfolio_totals(db_path)
+    analytics = trade_analytics(db_path)
+    orders = list_all_copy_orders(db_path)
+
+    starting_balance = round(float(settings["paper_starting_balance"]), 2)
+    total_buy_notional = round(sum(float(order.get("requested_amount_usd") or 0.0) for order in orders if order.get("side") == "BUY"), 2)
+    total_sell_proceeds = round(sum(float(order.get("requested_amount_usd") or 0.0) for order in orders if order.get("side") == "SELL"), 2)
+    reconstructed_cash = round(starting_balance - total_buy_notional + total_sell_proceeds, 2)
+    open_market_value = round(sum(float(row.get("market_value") or 0.0) for row in analytics["open_trades"]), 2)
+    reconstructed_net_value = round(reconstructed_cash + open_market_value, 2)
+    closed_realized_pnl = round(sum(float(row.get("pnl") or 0.0) for row in analytics["closed_trades"]), 2)
+    open_unrealized_pnl = round(sum(float(row.get("unrealized_pnl") or 0.0) for row in analytics["open_trades"]), 2)
+    expected_total_gain = round(closed_realized_pnl + open_unrealized_pnl, 2)
+    displayed_total_gain = round(float(portfolio["total_gain"]), 2)
+    cash_difference = round(float(portfolio["cash_balance"]) - reconstructed_cash, 2)
+    net_value_difference = round(float(portfolio["net_value"]) - reconstructed_net_value, 2)
+    gain_difference = round(displayed_total_gain - expected_total_gain, 2)
+    max_difference = max(abs(cash_difference), abs(net_value_difference), abs(gain_difference))
+    verified = max_difference < 0.02
+
+    return {
+        "verified": verified,
+        "max_difference": round(max_difference, 2),
+        "cash_difference": cash_difference,
+        "net_value_difference": net_value_difference,
+        "gain_difference": gain_difference,
+        "reconstructed_cash": reconstructed_cash,
+        "reconstructed_net_value": reconstructed_net_value,
+        "open_market_value": open_market_value,
+        "closed_realized_pnl": closed_realized_pnl,
+        "open_unrealized_pnl": open_unrealized_pnl,
+        "expected_total_gain": expected_total_gain,
+        "displayed_total_gain": displayed_total_gain,
+        "total_buy_notional": total_buy_notional,
+        "total_sell_proceeds": total_sell_proceeds,
+        "orders_count": len(orders),
+    }
+
+
+def live_profit_verification(source_positions: list[dict], db_path: Path | str = DB_PATH) -> dict:
+    settings = get_settings(db_path)
+    orders = list_all_copy_orders(db_path)
+    price_map, alias_price_map = _price_maps_from_positions(source_positions)
+
+    closed_realized_pnl = 0.0
+    open_lots: list[dict] = []
+    lots_by_key: dict[str, list[dict]] = {}
+    total_buy_notional = 0.0
+    total_sell_proceeds = 0.0
+
+    for order in orders:
+        market_slug = order.get("market_slug") or ""
+        outcome = order.get("outcome") or ""
+        position_key = f"{market_slug}:{outcome}"
+        side = order.get("side")
+        shares = float(order.get("shares") or 0.0)
+        price = float(order.get("executed_price") or 0.0)
+        amount = round(float(order.get("requested_amount_usd") or 0.0), 2)
+        lots = lots_by_key.setdefault(position_key, [])
+
+        if side == "BUY":
+            total_buy_notional = round(total_buy_notional + amount, 2)
+            lots.append(
+                {
+                    "position_key": position_key,
+                    "market_slug": market_slug,
+                    "market_title": order.get("market_title"),
+                    "outcome": outcome,
+                    "entry_time": order.get("created_at") or "",
+                    "entry_price": price,
+                    "remaining_shares": shares,
+                }
+            )
+            continue
+
+        total_sell_proceeds = round(total_sell_proceeds + amount, 2)
+        sell_shares = shares
+        while sell_shares > 1e-9 and lots:
+            lot = lots[0]
+            matched_shares = min(float(lot["remaining_shares"]), sell_shares)
+            closed_realized_pnl = round(closed_realized_pnl + (matched_shares * (price - float(lot["entry_price"]))), 2)
+            lot["remaining_shares"] = round(float(lot["remaining_shares"]) - matched_shares, 6)
+            sell_shares = round(sell_shares - matched_shares, 6)
+            if lot["remaining_shares"] <= 1e-9:
+                lots.pop(0)
+
+    open_market_value = 0.0
+    open_unrealized_pnl = 0.0
+    for lots in lots_by_key.values():
+        for lot in lots:
+            remaining_shares = float(lot.get("remaining_shares") or 0.0)
+            if remaining_shares <= 1e-9:
+                continue
+            entry_price = float(lot.get("entry_price") or 0.0)
+            current_price = _resolve_mark_price(lot, price_map, alias_price_map, entry_price)
+            market_value = round(remaining_shares * current_price, 2)
+            cost_basis = round(remaining_shares * entry_price, 2)
+            unrealized = round(market_value - cost_basis, 2)
+            open_market_value = round(open_market_value + market_value, 2)
+            open_unrealized_pnl = round(open_unrealized_pnl + unrealized, 2)
+            open_lots.append(
+                {
+                    "position_key": lot["position_key"],
+                    "market_slug": lot.get("market_slug"),
+                    "market_title": lot.get("market_title"),
+                    "outcome": lot.get("outcome"),
+                    "entry_time": lot.get("entry_time"),
+                    "entry_price": round(entry_price, 4),
+                    "current_price": round(current_price, 4),
+                    "shares": round(remaining_shares, 6),
+                    "market_value": market_value,
+                    "unrealized_pnl": unrealized,
+                }
+            )
+
+    starting_balance = round(float(settings["paper_starting_balance"]), 2)
+    reconstructed_cash = round(starting_balance - total_buy_notional + total_sell_proceeds, 2)
+    reconstructed_net_value = round(reconstructed_cash + open_market_value, 2)
+    expected_total_gain = round(closed_realized_pnl + open_unrealized_pnl, 2)
+    displayed = portfolio_totals(db_path)
+    display_difference = round(float(displayed["net_value"]) - reconstructed_net_value, 2)
+
+    return {
+        "verified": abs(display_difference) < 0.02,
+        "displayed_net_value": round(float(displayed["net_value"]), 2),
+        "displayed_cash_balance": round(float(displayed["cash_balance"]), 2),
+        "displayed_marked_positions": round(float(displayed["gross_exposure"]), 2),
+        "reconstructed_cash": reconstructed_cash,
+        "reconstructed_net_value": reconstructed_net_value,
+        "open_market_value": open_market_value,
+        "closed_realized_pnl": round(closed_realized_pnl, 2),
+        "open_unrealized_pnl": round(open_unrealized_pnl, 2),
+        "expected_total_gain": expected_total_gain,
+        "display_difference": display_difference,
+        "orders_count": len(orders),
+        "source_positions_count": len(source_positions or []),
+        "open_positions_count": len(open_lots),
+        "open_positions_sample": open_lots[:10],
     }
 
 
