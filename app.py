@@ -129,6 +129,15 @@ def fmt_signed_currency(value) -> str:
     return f"{'+' if amount > 0 else ''}${amount:,.2f}"
 
 
+def signed_class(value) -> str:
+    amount = float(value or 0)
+    if amount > 0:
+        return "text-positive"
+    if amount < 0:
+        return "text-negative"
+    return "text-muted"
+
+
 def short_text(value, limit: int) -> str:
     return (value or "")[:limit]
 
@@ -145,10 +154,10 @@ def topbar():
                 className="topbar-left",
                 children=[
                     html.Div(
-                        className="topbar-title-wrap",
+                        className="topbar-brand",
                         children=[
-                            html.Span("Polymarket ", className="topbar-title"),
-                            html.Span("Copy Trader", className="topbar-title accent"),
+                            html.Div("CopyPelosi Exchange", className="topbar-title"),
+                            html.Div("Polymarket copy execution monitor", className="topbar-subtitle"),
                         ],
                     ),
                     html.Span(id="status-pill", className="status-running", children="RUNNING"),
@@ -168,10 +177,45 @@ def topbar():
     )
 
 
-def stat_card(label: str, value_id: str, sub_id: str | None = None):
+def market_strip():
+    item = lambda label, value_id: html.Div(
+        className="market-strip-item",
+        children=[
+            html.Div(label, className="market-strip-label"),
+            html.Div(id=value_id, className="market-strip-value mono"),
+        ],
+    )
+    return html.Div(
+        className="market-strip",
+        children=[
+            html.Div(
+                className="market-strip-primary",
+                children=[
+                    html.Div("Lead Account", className="market-strip-label"),
+                    html.Div(id="market-lead", className="market-strip-headline"),
+                    html.Div(id="market-lead-sub", className="market-strip-sub"),
+                ],
+            ),
+            html.Div(
+                className="market-strip-grid",
+                children=[
+                    item("Heartbeat", "market-heartbeat"),
+                    item("Sync Cadence", "market-cadence"),
+                    item("Exposure Cap", "market-exposure"),
+                    item("Leader NAV", "market-leader-nav"),
+                ],
+            ),
+        ],
+    )
+
+
+def stat_card(label: str, value_id: str, sub_id: str | None = None, tone_id: str | None = None):
+    value_row = [html.Div(id=value_id, className="stat-value")]
+    if tone_id:
+        value_row.append(html.Div(id=tone_id, className="stat-chip"))
     children = [
         html.Div(label, className="stat-label"),
-        html.Div(id=value_id, className="stat-value"),
+        html.Div(className="stat-value-row", children=value_row),
     ]
     if sub_id:
         children.append(html.Div(id=sub_id, className="stat-sub"))
@@ -294,13 +338,14 @@ app.layout = html.Div(
         html.Div(
             className="page",
             children=[
+                market_strip(),
                 html.Div(
                     className="stats-row",
                     children=[
                         stat_card("Tracked Trader", "stat-target", "stat-target-sub"),
                         stat_card("Pending Copies", "stat-pending", "stat-pending-sub"),
                         stat_card("Copied Notional", "stat-copied-notional", "stat-copied-sub"),
-                        stat_card("Paper Portfolio", "stat-net-value", "stat-net-sub"),
+                        stat_card("Paper Portfolio", "stat-net-value", "stat-net-sub", "stat-net-chip"),
                     ],
                 ),
                 html.Div(
@@ -414,6 +459,12 @@ def portfolio_chart():
     Output("toggle-engine-btn", "children"),
     Output("refresh-text", "children"),
     Output("clock", "children"),
+    Output("market-lead", "children"),
+    Output("market-lead-sub", "children"),
+    Output("market-heartbeat", "children"),
+    Output("market-cadence", "children"),
+    Output("market-exposure", "children"),
+    Output("market-leader-nav", "children"),
     Output("stat-target", "children"),
     Output("stat-target-sub", "children"),
     Output("stat-pending", "children"),
@@ -421,6 +472,8 @@ def portfolio_chart():
     Output("stat-copied-notional", "children"),
     Output("stat-copied-sub", "children"),
     Output("stat-net-value", "children"),
+    Output("stat-net-chip", "children"),
+    Output("stat-net-chip", "className"),
     Output("stat-net-sub", "children"),
     Output("source-positions-badge", "children"),
     Output("source-positions-table", "children"),
@@ -600,6 +653,8 @@ def refresh_dashboard(_, trade_tab):
     )
 
     refresh_text = f"Last sync: {fmt_pacific_time(app_state['last_sync_at']) if app_state['last_sync_at'] else 'never'}"
+    net_gain = float(portfolio["total_gain"])
+    net_chip_text = f"{portfolio['total_gain_pct']:+.2f}%"
 
     return (
         heartbeat_label(app_state, runtime_status, stale_age_seconds),
@@ -609,11 +664,19 @@ def refresh_dashboard(_, trade_tab):
         fmt_pacific_clock(),
         target_label,
         target_wallet,
+        heartbeat_label(app_state, runtime_status, stale_age_seconds),
+        f"{settings['sync_interval_ms']} ms",
+        fmt_currency(settings["max_total_exposure_usd"]),
+        fmt_currency(float(app_state.get("leader_wallet_value") or 0.0)),
+        target_label,
+        target_wallet,
         str(len(pending)),
         f"{len(copy_orders)} total copied orders",
         fmt_currency(copied_notional),
         f"Cash {fmt_currency(portfolio['cash_balance'])} / Exposure {fmt_currency(portfolio['gross_exposure'])}",
         fmt_currency(portfolio["net_value"]),
+        net_chip_text,
+        f"stat-chip {signed_class(net_gain)}",
         f"{fmt_signed_currency(portfolio['total_gain'])} ({portfolio['total_gain_pct']:+.2f}%) vs start",
         str(len(source_positions)),
         render_table(["Market", "Outcome", "Shares", "Notional", "Price"], source_position_rows),
