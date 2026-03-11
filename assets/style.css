@@ -15,8 +15,8 @@
   --green-soft: rgba(0, 200, 5, 0.14);
   --red: #ff5a63;
   --red-soft: rgba(255, 90, 99, 0.14);
-  --blue: #4aa3ff;
-  --blue-soft: rgba(74, 163, 255, 0.14);
+  --cyan: #00d4ff;
+  --cyan-soft: rgba(0, 212, 255, 0.14);
   --shadow: 0 24px 72px rgba(0, 0, 0, 0.34);
 }
 
@@ -35,7 +35,7 @@ body {
   color: var(--text);
   font-family: 'Manrope', 'Segoe UI', sans-serif;
   background:
-    radial-gradient(circle at top left, rgba(74, 163, 255, 0.12), transparent 28%),
+    radial-gradient(circle at top left, rgba(0, 212, 255, 0.08), transparent 28%),
     linear-gradient(180deg, var(--bg-top) 0%, var(--bg) 32%, #05080c 100%);
   -webkit-font-smoothing: antialiased;
 }
@@ -186,12 +186,12 @@ input {
 .btn-accent {
   padding: 10px 14px;
   color: #eef6ff;
-  background: linear-gradient(180deg, rgba(74, 163, 255, 0.22), rgba(74, 163, 255, 0.12));
-  border-color: rgba(74, 163, 255, 0.28);
+  background: linear-gradient(180deg, rgba(0, 212, 255, 0.18), rgba(0, 212, 255, 0.10));
+  border-color: rgba(0, 212, 255, 0.24);
 }
 
 .btn-accent:hover {
-  background: linear-gradient(180deg, rgba(74, 163, 255, 0.28), rgba(74, 163, 255, 0.16));
+  background: linear-gradient(180deg, rgba(0, 212, 255, 0.24), rgba(0, 212, 255, 0.14));
 }
 
 .page {
@@ -473,8 +473,8 @@ thead th {
 
 .trade-tab-selected {
   color: #eff7ff !important;
-  background: rgba(74, 163, 255, 0.16) !important;
-  border-color: rgba(74, 163, 255, 0.28) !important;
+  background: rgba(0, 212, 255, 0.12) !important;
+  border-color: rgba(0, 212, 255, 0.22) !important;
 }
 
 .trade-book-table {
@@ -601,8 +601,8 @@ tbody td {
 
 .settings-input:focus {
   outline: none;
-  border-color: rgba(74, 163, 255, 0.36);
-  box-shadow: 0 0 0 3px rgba(74, 163, 255, 0.10);
+  border-color: rgba(0, 212, 255, 0.36);
+  box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.10);
 }
 
 @media (max-width: 1280px) {
