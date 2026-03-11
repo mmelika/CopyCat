@@ -51,6 +51,10 @@ def fmt_signed_currency(value) -> str:
     return f"{'+' if amount > 0 else ''}${amount:,.2f}"
 
 
+def short_text(value, limit: int) -> str:
+    return (value or "")[:limit]
+
+
 def status_class(status: str) -> str:
     return "status-running" if status == "RUNNING" else "status-stopped"
 
@@ -311,7 +315,7 @@ def portfolio_chart():
         paper_bgcolor="#111114",
         plot_bgcolor="#111114",
         margin={"l": 18, "r": 18, "t": 8, "b": 24},
-        font={"color": "#a1a1aa", "family": "Inter"},
+        font={"color": "#a1a1aa", "family": "Space Grotesk"},
         xaxis={"showgrid": False, "zeroline": False, "showline": False, "tickfont": {"size": 10}},
         yaxis={"gridcolor": "rgba(255,255,255,0.06)", "zeroline": False, "tickprefix": "$"},
     )
@@ -370,11 +374,12 @@ def refresh_dashboard(_, trade_tab):
     portfolio = database.portfolio_totals(DB_PATH)
     analytics = database.trade_analytics(DB_PATH)
     daily_performance = database.daily_portfolio_performance(DB_PATH)[:12]
+    daily_realized_map = {row["date"]: row["realized_pnl"] for row in analytics["daily_realized"]}
 
     copied_notional = sum(row["requested_amount_usd"] for row in copy_orders if row["status"] == "FILLED")
     source_position_rows = [
         [
-            row["market_title"][:36],
+            short_text(row["market_title"], 36),
             row["outcome"],
             fmt_number(row["shares"], 2),
             fmt_currency(row["notional_usd"]),
@@ -384,7 +389,7 @@ def refresh_dashboard(_, trade_tab):
     ] or [["No source positions yet", "-", "-", "-", "-"]]
     copied_trade_rows = [
         [
-            row["market_title"][:34],
+            short_text(row["market_title"], 34),
             row["outcome"],
             row["side"],
             fmt_currency(row["requested_amount_usd"]),
@@ -397,14 +402,15 @@ def refresh_dashboard(_, trade_tab):
         [
             row["date"],
             fmt_signed_currency(row["day_change"]),
+            fmt_signed_currency(daily_realized_map.get(row["date"], 0.0)),
             fmt_currency(row["net_value"]),
         ]
         for row in daily_performance
-    ] or [["No daily performance yet", "-", "-"]]
+    ] or [["No daily performance yet", "-", "-", "-"]]
 
     open_trade_rows = [
         [
-            row["market_title"][:30],
+            short_text(row["market_title"], 30),
             row["outcome"],
             fmt_number(row["shares"], 2),
             fmt_currency(row["cost_basis"]),
@@ -415,7 +421,7 @@ def refresh_dashboard(_, trade_tab):
     ] or [["No open trades", "-", "-", "-", "-", "-"]]
     closed_trade_rows = [
         [
-            row["market_title"][:26],
+            short_text(row["market_title"], 26),
             row["outcome"],
             fmt_number(row["shares"], 2),
             fmt_currency(row["cost_basis"]),
@@ -528,7 +534,7 @@ def refresh_dashboard(_, trade_tab):
         render_table(["Market", "Outcome", "Shares", "Notional", "Price"], source_position_rows),
         portfolio_chart(),
         str(len(daily_performance)),
-        render_table(["Date", "Day Change", "Portfolio"], daily_rows),
+        render_table(["Date", "Day Change", "Closed P/L", "Portfolio"], daily_rows),
         str(len(sync_runs)),
         render_table(["Time", "Status", "Seen", "New", "Copied", "Latency"], sync_rows),
         str(len(copy_orders)),
