@@ -984,6 +984,7 @@ def live_profit_verification(source_positions: list[dict], db_path: Path | str =
 
     open_market_value = 0.0
     open_unrealized_pnl = 0.0
+    reconstructed_by_key: dict[str, dict] = {}
     for lots in lots_by_key.values():
         for lot in lots:
             remaining_shares = float(lot.get("remaining_shares") or 0.0)
@@ -996,27 +997,80 @@ def live_profit_verification(source_positions: list[dict], db_path: Path | str =
             unrealized = round(market_value - cost_basis, 2)
             open_market_value = round(open_market_value + market_value, 2)
             open_unrealized_pnl = round(open_unrealized_pnl + unrealized, 2)
-            open_lots.append(
+            lot_row = {
+                "position_key": lot["position_key"],
+                "market_slug": lot.get("market_slug"),
+                "market_title": lot.get("market_title"),
+                "outcome": lot.get("outcome"),
+                "entry_time": lot.get("entry_time"),
+                "entry_price": round(entry_price, 4),
+                "current_price": round(current_price, 4),
+                "shares": round(remaining_shares, 6),
+                "market_value": market_value,
+                "unrealized_pnl": unrealized,
+            }
+            open_lots.append(lot_row)
+            aggregated = reconstructed_by_key.setdefault(
+                lot["position_key"],
                 {
                     "position_key": lot["position_key"],
                     "market_slug": lot.get("market_slug"),
                     "market_title": lot.get("market_title"),
                     "outcome": lot.get("outcome"),
-                    "entry_time": lot.get("entry_time"),
-                    "entry_price": round(entry_price, 4),
-                    "current_price": round(current_price, 4),
-                    "shares": round(remaining_shares, 6),
-                    "market_value": market_value,
-                    "unrealized_pnl": unrealized,
-                }
+                    "shares": 0.0,
+                    "entry_cost_basis": 0.0,
+                    "audit_market_value": 0.0,
+                    "audit_unrealized_pnl": 0.0,
+                    "audit_current_price": round(current_price, 4),
+                },
             )
+            aggregated["shares"] = round(float(aggregated["shares"]) + remaining_shares, 6)
+            aggregated["entry_cost_basis"] = round(float(aggregated["entry_cost_basis"]) + cost_basis, 2)
+            aggregated["audit_market_value"] = round(float(aggregated["audit_market_value"]) + market_value, 2)
+            aggregated["audit_unrealized_pnl"] = round(float(aggregated["audit_unrealized_pnl"]) + unrealized, 2)
+            aggregated["audit_current_price"] = round(current_price, 4)
 
     starting_balance = round(float(settings["paper_starting_balance"]), 2)
     reconstructed_cash = round(starting_balance - total_buy_notional + total_sell_proceeds, 2)
     reconstructed_net_value = round(reconstructed_cash + open_market_value, 2)
     expected_total_gain = round(closed_realized_pnl + open_unrealized_pnl, 2)
     displayed = portfolio_totals(db_path)
+    displayed_positions = list_local_positions_marked(db_path)
     display_difference = round(float(displayed["net_value"]) - reconstructed_net_value, 2)
+    displayed_by_key = {
+        row["position_key"]: {
+            "displayed_shares": round(float(row.get("shares") or 0.0), 6),
+            "displayed_market_value": round(float(row.get("market_value") or 0.0), 2),
+            "displayed_current_price": round(float(row.get("current_price") or 0.0), 4),
+            "displayed_unrealized_pnl": round(float(row.get("unrealized_pnl") or 0.0), 2),
+        }
+        for row in displayed_positions
+    }
+    mismatch_rows = []
+    for position_key in sorted(set(displayed_by_key) | set(reconstructed_by_key)):
+        displayed_row = displayed_by_key.get(position_key, {})
+        audit_row = reconstructed_by_key.get(position_key, {})
+        displayed_value = round(float(displayed_row.get("displayed_market_value") or 0.0), 2)
+        audit_value = round(float(audit_row.get("audit_market_value") or 0.0), 2)
+        value_difference = round(displayed_value - audit_value, 2)
+        if abs(value_difference) < 0.01:
+            continue
+        mismatch_rows.append(
+            {
+                "position_key": position_key,
+                "market_slug": audit_row.get("market_slug") or position_key.split(":", 1)[0],
+                "market_title": audit_row.get("market_title") or "",
+                "outcome": audit_row.get("outcome") or position_key.split(":", 1)[1] if ":" in position_key else "",
+                "displayed_market_value": displayed_value,
+                "audit_market_value": audit_value,
+                "difference": value_difference,
+                "displayed_current_price": round(float(displayed_row.get("displayed_current_price") or 0.0), 4),
+                "audit_current_price": round(float(audit_row.get("audit_current_price") or 0.0), 4),
+                "displayed_shares": round(float(displayed_row.get("displayed_shares") or 0.0), 6),
+                "audit_shares": round(float(audit_row.get("shares") or 0.0), 6),
+            }
+        )
+    mismatch_rows.sort(key=lambda row: abs(float(row["difference"])), reverse=True)
 
     return {
         "verified": abs(display_difference) < 0.02,
@@ -1034,6 +1088,7 @@ def live_profit_verification(source_positions: list[dict], db_path: Path | str =
         "source_positions_count": len(source_positions or []),
         "open_positions_count": len(open_lots),
         "open_positions_sample": open_lots[:10],
+        "position_mismatches": mismatch_rows[:20],
     }
 
 
