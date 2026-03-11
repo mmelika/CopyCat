@@ -5,6 +5,7 @@ import os
 
 import dash
 import plotly.graph_objects as go
+from flask import jsonify
 from dash import Input, Output, State, callback_context, dcc, html
 
 from copytrader import database
@@ -30,6 +31,11 @@ app = dash.Dash(
 )
 app.title = "CopyPelosi"
 server = app.server
+
+
+@server.get("/healthz")
+def healthz():
+    return jsonify(engine.health()), 200
 
 
 def fmt_currency(value) -> str:

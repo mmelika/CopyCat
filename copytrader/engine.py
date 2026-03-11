@@ -118,6 +118,9 @@ class CopyTradingEngine:
         self._thread = None
         self._lock = threading.Lock()
         self._latest_results = []
+        self._last_tick_started_at = ""
+        self._last_tick_finished_at = ""
+        self._last_tick_status = "idle"
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -129,6 +132,8 @@ class CopyTradingEngine:
 
     def stop(self) -> None:
         self._stop_event.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=5)
 
     def _run(self) -> None:
         while not self._stop_event.is_set():
@@ -157,6 +162,8 @@ class CopyTradingEngine:
         if app_state["engine_status"] != "RUNNING" and not force:
             return {"status": "PAUSED", "message": "Engine paused."}
 
+        self._last_tick_started_at = database.utc_now()
+        self._last_tick_status = "running"
         run_id = database.insert_sync_run(db_path=self.db_path)
         started = time.perf_counter()
         trades_seen = 0
@@ -224,7 +231,24 @@ class CopyTradingEngine:
             message=message,
             db_path=self.db_path,
         )
+        self._last_tick_finished_at = database.utc_now()
+        self._last_tick_status = status.lower()
         return {"status": status, "message": message, "latency_ms": latency_ms}
+
+    def health(self) -> dict:
+        app_state = database.get_app_state(self.db_path)
+        portfolio = database.portfolio_totals(self.db_path)
+        return {
+            "status": "ok" if app_state.get("engine_status") in {"RUNNING", "PAUSED"} else "degraded",
+            "engine_status": app_state.get("engine_status"),
+            "last_sync_at": app_state.get("last_sync_at"),
+            "last_error": app_state.get("last_error"),
+            "last_tick_started_at": self._last_tick_started_at,
+            "last_tick_finished_at": self._last_tick_finished_at,
+            "last_tick_status": self._last_tick_status,
+            "net_value": portfolio["net_value"],
+            "cash_balance": portfolio["cash_balance"],
+        }
 
     def _copy_trades_first(self, trades: list[dict], settings: dict, leader_wallet_value: float) -> tuple[int, int]:
         copied = 0

@@ -46,6 +46,26 @@ bash deploy/bootstrap_ec2.sh
 
 If you want me to do the EC2 deployment directly, I need the instance IP or DNS name, the SSH username, and a usable SSH key path or access method.
 
+## Operations
+
+Health check:
+
+```bash
+curl http://127.0.0.1:8060/healthz
+```
+
+Database backup:
+
+```bash
+bash scripts/backup_db.sh
+```
+
+Suggested daily cron on the server:
+
+```bash
+0 3 * * * /home/ec2-user/CopyCat/scripts/backup_db.sh >> /home/ec2-user/CopyCat/backups/backup.log 2>&1
+```
+
 ## Notes
 
 - Persistence lives in [data/copytrader.db](/Users/marco/Documents/AI Shit/CopyPelosi/data/copytrader.db) after the first run.

@@ -4,15 +4,21 @@ After=network.target
 
 [Service]
 Type=simple
-User=ubuntu
-WorkingDirectory=/home/ubuntu/CopyCat
+User=ec2-user
+WorkingDirectory=/home/ec2-user/CopyCat
 Environment=PYTHONUNBUFFERED=1
-Environment=HOST=127.0.0.1
+Environment=HOST=0.0.0.0
 Environment=PORT=8060
-ExecStart=/home/ubuntu/CopyCat/.venv/bin/gunicorn --workers 2 --threads 4 --bind 127.0.0.1:8060 wsgi:server
+ExecStart=/home/ec2-user/CopyCat/.venv/bin/gunicorn --workers 2 --threads 4 --bind 0.0.0.0:8060 wsgi:server
 Restart=always
 RestartSec=2
+TimeoutStartSec=30
+TimeoutStopSec=30
+StartLimitIntervalSec=60
+StartLimitBurst=10
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target
-
