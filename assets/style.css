@@ -473,6 +473,17 @@ tbody td {
   font-weight: 600;
 }
 
+.market-link {
+  color: var(--text);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.market-link:hover {
+  color: #9ad2ff;
+  text-decoration: underline;
+}
+
 .mono {
   font-family: 'IBM Plex Mono', monospace;
 }

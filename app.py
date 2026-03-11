@@ -136,9 +136,9 @@ def audit_profit():
                 "status": "ok" if verification["verified"] else "warning",
                 "target_wallet": profile["wallet"],
                 "target_handle": profile.get("handle") or settings.get("target_handle") or "",
-                "server_net_value": portfolio["net_value"],
-                "server_cash_balance": portfolio["cash_balance"],
-                "server_marked_positions": portfolio["gross_exposure"],
+                "server_net_value": verification["displayed_net_value"],
+                "server_cash_balance": verification["displayed_cash_balance"],
+                "server_marked_positions": verification["displayed_marked_positions"],
                 "polymarket_verification": verification,
             }
         ), 200
@@ -179,6 +179,16 @@ def signed_class(value) -> str:
 
 def short_text(value, limit: int) -> str:
     return (value or "")[:limit]
+
+
+def polymarket_market_url(market_slug: str) -> str:
+    slug = (market_slug or "").strip().strip("/")
+    return f"https://polymarket.com/event/{slug}" if slug else "https://polymarket.com"
+
+
+def market_link(label: str, market_slug: str, limit: int | None = None):
+    text = short_text(label, limit) if limit else (label or market_slug or "Market")
+    return html.A(text, href=polymarket_market_url(market_slug), target="_blank", rel="noreferrer", className="market-link")
 
 
 def status_class(status: str) -> str:
@@ -755,7 +765,7 @@ def refresh_dashboard(_, trade_tab):
     open_trade_rows = [
         [
             fmt_pacific_time(row["entry_time"]),
-            short_text(row["market_title"], 30),
+            market_link(row["market_title"], row["market_slug"], 30),
             row["outcome"],
             fmt_number(row["shares"], 2),
             fmt_number(row["entry_price"], 3),
@@ -770,7 +780,7 @@ def refresh_dashboard(_, trade_tab):
         [
             fmt_pacific_time(row["entry_time"]),
             fmt_pacific_time(row["exit_time"]),
-            short_text(row["market_title"], 26),
+            market_link(row["market_title"], row["market_slug"], 26),
             row["outcome"],
             fmt_number(row["shares"], 2),
             fmt_number(row["entry_price"], 3),
@@ -823,7 +833,7 @@ def refresh_dashboard(_, trade_tab):
                     html.Div(
                         className="portfolio-holding-main",
                         children=[
-                            html.Div(short_text(row["market_title"], 42), className="portfolio-holding-title"),
+                            market_link(row["market_title"], row["market_slug"], 42),
                             html.Div(
                                 f"{row['outcome']} | {fmt_number(row['shares'], 2)} shares @ {fmt_number(row['current_price'], 3)}",
                                 className="portfolio-holding-subtitle",
