@@ -5,6 +5,7 @@ from typing import Any
 
 import requests
 import re
+import json
 
 from .config import API_TIMEOUT_SECONDS, USER_AGENT
 
@@ -53,6 +54,18 @@ def _parse_iso(value: str) -> datetime:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _parse_json_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if value in (None, ""):
+        return []
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    return parsed if isinstance(parsed, list) else []
 
 
 class PolymarketClient:
@@ -163,6 +176,49 @@ class PolymarketClient:
             if positions:
                 return positions
         return []
+
+    def fetch_market_prices(self, records: list[dict]) -> list[dict]:
+        by_slug: dict[str, dict] = {}
+        for record in records or []:
+            slug = (record.get("market_slug") or "").strip()
+            outcome = record.get("outcome") or ""
+            if slug and outcome:
+                by_slug[slug] = record
+
+        prices: list[dict] = []
+        for slug in by_slug:
+            try:
+                payload = self._get_json("https://gamma-api.polymarket.com/markets", params={"slug": slug})
+            except Exception:
+                continue
+            items = payload if isinstance(payload, list) else []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                outcomes = _parse_json_list(item.get("outcomes"))
+                outcome_prices = _parse_json_list(item.get("outcomePrices"))
+                if not outcomes or not outcome_prices:
+                    continue
+                market_slug = item.get("slug") or slug
+                market_title = item.get("question") or item.get("title") or market_slug
+                condition_id = _clean_id(item.get("conditionId") or item.get("condition_id"))
+                token_ids = _parse_json_list(item.get("clobTokenIds") or item.get("tokenIds"))
+                for index, outcome in enumerate(outcomes):
+                    if index >= len(outcome_prices):
+                        continue
+                    token_id = _clean_id(token_ids[index]) if index < len(token_ids) else ""
+                    prices.append(
+                        {
+                            "position_key": f"{market_slug}:{outcome}",
+                            "market_slug": market_slug,
+                            "market_title": market_title,
+                            "outcome": outcome,
+                            "price": _to_float(outcome_prices[index], 0.0),
+                            "condition_id": condition_id,
+                            "token_id": token_id,
+                        }
+                    )
+        return prices
 
     def _normalize_trades(self, payload: Any, *, wallet: str, handle: str) -> list[dict]:
         items = payload if isinstance(payload, list) else payload.get("data") or payload.get("items") or payload.get("history") or []
@@ -285,6 +341,7 @@ class PolymarketClient:
             )
             live_price = _to_float(
                 item.get("outcomePrice")
+                or item.get("curPrice")
                 or item.get("currentPrice")
                 or item.get("markPrice")
                 or item.get("price"),

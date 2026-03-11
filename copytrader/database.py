@@ -743,6 +743,16 @@ def fetch_live_source_positions(db_path: Path | str = DB_PATH, limit: int = 200)
         return list_source_positions(limit, db_path)
 
 
+def fetch_live_market_prices(records: list[dict], db_path: Path | str = DB_PATH) -> list[dict]:
+    from .polymarket import PolymarketClient
+
+    client = PolymarketClient()
+    try:
+        return client.fetch_market_prices(records)
+    except Exception:
+        return []
+
+
 def _resolve_mark_price(record: dict, price_map: dict[tuple[str, str], float], alias_price_map: dict[str, float], fallback_price: float) -> float:
     current_price = price_map.get((record.get("market_slug") or "", record.get("outcome") or ""))
     if current_price is None or current_price <= 0:
@@ -808,9 +818,6 @@ def refresh_local_position_market_values(db_path: Path | str = DB_PATH, freeze_r
 
 def trade_analytics(db_path: Path | str = DB_PATH, source_positions: list[dict] | None = None) -> dict:
     orders = list_all_copy_orders(db_path)
-    if source_positions is None:
-        source_positions = fetch_live_source_positions(db_path)
-    price_map, alias_price_map = _price_maps_from_positions(source_positions)
     open_lots: list[dict] = []
     closed_trades: list[dict] = []
     daily_realized: dict[str, float] = {}
@@ -870,6 +877,25 @@ def trade_analytics(db_path: Path | str = DB_PATH, source_positions: list[dict] 
             sell_shares = round(sell_shares - matched_shares, 6)
             if lot["remaining_shares"] <= 1e-9:
                 lots.pop(0)
+
+    if source_positions is None:
+        source_positions = fetch_live_market_prices(
+            [
+                {
+                    "market_slug": lot.get("market_slug"),
+                    "market_title": lot.get("market_title"),
+                    "outcome": lot.get("outcome"),
+                    "position_key": lot.get("position_key"),
+                }
+                for lots in lots_by_key.values()
+                for lot in lots
+                if float(lot.get("remaining_shares") or 0.0) > 1e-9
+            ],
+            db_path,
+        )
+        if not source_positions:
+            source_positions = fetch_live_source_positions(db_path)
+    price_map, alias_price_map = _price_maps_from_positions(source_positions)
 
     for lots in lots_by_key.values():
         for lot in lots:
@@ -990,7 +1016,6 @@ def profit_verification(db_path: Path | str = DB_PATH) -> dict:
 def live_profit_verification(source_positions: list[dict], db_path: Path | str = DB_PATH) -> dict:
     settings = get_settings(db_path)
     orders = list_all_copy_orders(db_path)
-    price_map, alias_price_map = _price_maps_from_positions(source_positions)
 
     closed_realized_pnl = 0.0
     open_lots: list[dict] = []
@@ -1034,6 +1059,23 @@ def live_profit_verification(source_positions: list[dict], db_path: Path | str =
             sell_shares = round(sell_shares - matched_shares, 6)
             if lot["remaining_shares"] <= 1e-9:
                 lots.pop(0)
+
+    market_price_positions = fetch_live_market_prices(
+        [
+            {
+                "market_slug": lot.get("market_slug"),
+                "market_title": lot.get("market_title"),
+                "outcome": lot.get("outcome"),
+                "position_key": lot.get("position_key"),
+            }
+            for lots in lots_by_key.values()
+            for lot in lots
+            if float(lot.get("remaining_shares") or 0.0) > 1e-9
+        ],
+        db_path,
+    )
+    effective_source_positions = market_price_positions or source_positions
+    price_map, alias_price_map = _price_maps_from_positions(effective_source_positions)
 
     open_market_value = 0.0
     open_unrealized_pnl = 0.0
