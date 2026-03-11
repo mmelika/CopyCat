@@ -12,6 +12,7 @@ from .config import DB_PATH
 from .polymarket import PolymarketClient
 
 MIN_BET_USD = 0.05
+MEANINGFUL_MIN_BET_USD = 0.50
 
 
 def _clamp(value: float, lower: float, upper: float) -> float:
@@ -37,7 +38,7 @@ def _baseline_trade_size(bankroll: float) -> float:
     bankroll = max(float(bankroll), 0.0)
     if bankroll <= 0:
         return 0.0
-    return max(_round_up_to_cent(bankroll * 0.01), MIN_BET_USD)
+    return max(_round_up_to_cent(bankroll * 0.01), MEANINGFUL_MIN_BET_USD)
 
 
 def _copy_trade_size(local_equity: float, source_amount_usd: float, leader_wallet_value: float) -> float:
@@ -47,12 +48,12 @@ def _copy_trade_size(local_equity: float, source_amount_usd: float, leader_walle
     if local_equity <= 0:
         return 0.0
 
-    baseline = _baseline_trade_size(local_equity)
+    baseline = min(_baseline_trade_size(local_equity), _bankroll_bet_size(local_equity))
     if source_amount_usd <= 0 or leader_wallet_value <= 0:
         return max(_bankroll_bet_size(local_equity), baseline)
 
     # Mirror the leader's aggressiveness as a fraction of their wallet,
-    # but keep a small baseline so tiny source trades still place usable orders.
+    # but keep a meaningful floor so small source trades do not collapse into pennies.
     aggression_fraction = _clamp(source_amount_usd / leader_wallet_value, 0.0, 1.0)
     scaled_amount = _round_up_to_cent(local_equity * aggression_fraction)
     return min(max(scaled_amount, baseline), 20.0)
