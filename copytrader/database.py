@@ -452,6 +452,18 @@ def list_copy_orders(limit: int = 100, db_path: Path | str = DB_PATH) -> list[di
     return [dict(row) for row in rows]
 
 
+def list_all_copy_orders(db_path: Path | str = DB_PATH) -> list[dict]:
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM copy_orders
+            WHERE status='FILLED'
+            ORDER BY datetime(created_at) ASC, order_id ASC
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def get_local_positions(db_path: Path | str = DB_PATH) -> list[dict]:
     with connect(db_path) as conn:
         rows = conn.execute(
@@ -543,13 +555,150 @@ def portfolio_totals(db_path: Path | str = DB_PATH) -> dict:
     cash_balance = float(settings["paper_cash_balance"])
     realized_pnl = round(sum(row["realized_pnl"] for row in positions), 2)
     net_value = round(cash_balance + gross_exposure, 2)
+    starting_balance = float(settings["paper_starting_balance"])
+    total_gain = round(net_value - starting_balance, 2)
+    total_gain_pct = round((total_gain / starting_balance) * 100, 2) if starting_balance else 0.0
     return {
         "cash_balance": cash_balance,
         "gross_exposure": gross_exposure,
         "net_value": net_value,
         "positions_count": len(positions),
         "realized_pnl": realized_pnl,
+        "starting_balance": starting_balance,
+        "total_gain": total_gain,
+        "total_gain_pct": total_gain_pct,
     }
+
+
+def _find_source_price_map(db_path: Path | str = DB_PATH) -> dict[tuple[str, str], float]:
+    prices = {}
+    for row in list_source_positions(500, db_path):
+        key = (row.get("market_slug") or "", row.get("outcome") or "")
+        try:
+            prices[key] = float(row.get("price") or 0.0)
+        except (TypeError, ValueError):
+            prices[key] = 0.0
+    return prices
+
+
+def trade_analytics(db_path: Path | str = DB_PATH) -> dict:
+    orders = list_all_copy_orders(db_path)
+    price_map = _find_source_price_map(db_path)
+    open_lots: list[dict] = []
+    closed_trades: list[dict] = []
+    daily_realized: dict[str, float] = {}
+
+    lots_by_key: dict[str, list[dict]] = {}
+    for order in orders:
+        market_slug = order.get("market_slug") or ""
+        outcome = order.get("outcome") or ""
+        position_key = f"{market_slug}:{outcome}"
+        lots = lots_by_key.setdefault(position_key, [])
+        side = order.get("side")
+        shares = float(order.get("shares") or 0.0)
+        price = float(order.get("executed_price") or 0.0)
+        ts = order.get("created_at") or ""
+
+        if side == "BUY":
+            lots.append(
+                {
+                    "position_key": position_key,
+                    "market_slug": market_slug,
+                    "market_title": order.get("market_title"),
+                    "outcome": outcome,
+                    "entry_time": ts,
+                    "entry_price": price,
+                    "shares": shares,
+                    "remaining_shares": shares,
+                    "cost_basis": round(shares * price, 2),
+                }
+            )
+            continue
+
+        sell_shares = shares
+        while sell_shares > 1e-9 and lots:
+            lot = lots[0]
+            matched_shares = min(lot["remaining_shares"], sell_shares)
+            pnl = round(matched_shares * (price - lot["entry_price"]), 2)
+            closed_trades.append(
+                {
+                    "position_key": position_key,
+                    "market_slug": market_slug,
+                    "market_title": order.get("market_title") or lot.get("market_title"),
+                    "outcome": outcome,
+                    "entry_time": lot["entry_time"],
+                    "exit_time": ts,
+                    "entry_price": round(lot["entry_price"], 4),
+                    "exit_price": round(price, 4),
+                    "shares": round(matched_shares, 6),
+                    "cost_basis": round(matched_shares * lot["entry_price"], 2),
+                    "proceeds": round(matched_shares * price, 2),
+                    "pnl": pnl,
+                }
+            )
+            daily_key = (ts or "")[:10]
+            if daily_key:
+                daily_realized[daily_key] = round(daily_realized.get(daily_key, 0.0) + pnl, 2)
+            lot["remaining_shares"] = round(lot["remaining_shares"] - matched_shares, 6)
+            sell_shares = round(sell_shares - matched_shares, 6)
+            if lot["remaining_shares"] <= 1e-9:
+                lots.pop(0)
+
+    for lots in lots_by_key.values():
+        for lot in lots:
+            if lot["remaining_shares"] <= 1e-9:
+                continue
+            current_price = price_map.get((lot["market_slug"], lot["outcome"]), lot["entry_price"])
+            market_value = round(lot["remaining_shares"] * current_price, 2)
+            cost_basis = round(lot["remaining_shares"] * lot["entry_price"], 2)
+            open_lots.append(
+                {
+                    "position_key": lot["position_key"],
+                    "market_slug": lot["market_slug"],
+                    "market_title": lot.get("market_title"),
+                    "outcome": lot["outcome"],
+                    "entry_time": lot["entry_time"],
+                    "entry_price": round(lot["entry_price"], 4),
+                    "current_price": round(current_price, 4),
+                    "shares": round(lot["remaining_shares"], 6),
+                    "cost_basis": cost_basis,
+                    "market_value": market_value,
+                    "unrealized_pnl": round(market_value - cost_basis, 2),
+                }
+            )
+
+    open_lots.sort(key=lambda row: row["entry_time"], reverse=True)
+    closed_trades.sort(key=lambda row: row["exit_time"], reverse=True)
+    daily_rows = [
+        {"date": day, "realized_pnl": pnl}
+        for day, pnl in sorted(daily_realized.items(), reverse=True)
+    ]
+    return {
+        "open_trades": open_lots,
+        "closed_trades": closed_trades,
+        "daily_realized": daily_rows,
+    }
+
+
+def daily_portfolio_performance(db_path: Path | str = DB_PATH) -> list[dict]:
+    snapshots = list_portfolio_snapshots(db_path, limit=1000)
+    by_day: dict[str, dict] = {}
+    for snapshot in snapshots:
+        day = (snapshot.get("ts") or "")[:10]
+        if not day:
+            continue
+        by_day[day] = snapshot
+
+    ordered_days = sorted(by_day)
+    results = []
+    previous_net = None
+    for day in ordered_days:
+        snapshot = by_day[day]
+        net_value = round(float(snapshot["net_value"]), 2)
+        day_change = round(net_value - previous_net, 2) if previous_net is not None else 0.0
+        results.append({"date": day, "net_value": net_value, "day_change": day_change})
+        previous_net = net_value
+    return list(reversed(results))
 
 
 def reset_runtime_state(

@@ -1,15 +1,15 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Roboto+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
 
 :root {
-  --bg: #0a0a0b;
-  --panel: #111114;
-  --panel-2: #151519;
-  --text: #ffffff;
-  --muted: #9ca3af;
-  --faint: #52525b;
+  --bg: #07111c;
+  --panel: #0d1724;
+  --panel-2: #142235;
+  --text: #f8fafc;
+  --muted: #a8b6c7;
+  --faint: #5f7288;
   --border: rgba(255,255,255,0.07);
-  --accent: #a78bfa;
-  --accent-soft: rgba(167,139,250,0.10);
+  --accent: #38bdf8;
+  --accent-soft: rgba(56,189,248,0.12);
   --danger: #ef4444;
   --warn: #fbbf24;
   --success: #22c55e;
@@ -24,11 +24,12 @@
 body {
   margin: 0;
   background:
-    radial-gradient(circle at top right, rgba(167,139,250,0.14), transparent 24%),
-    radial-gradient(circle at left center, rgba(167,139,250,0.08), transparent 18%),
+    radial-gradient(circle at top right, rgba(34,197,94,0.18), transparent 20%),
+    radial-gradient(circle at left center, rgba(56,189,248,0.14), transparent 24%),
+    linear-gradient(180deg, rgba(255,255,255,0.02), transparent 35%),
     var(--bg);
   color: var(--text);
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -57,7 +58,7 @@ input {
   justify-content: space-between;
   align-items: center;
   backdrop-filter: blur(12px);
-  background: rgba(10,10,11,0.92);
+  background: rgba(7,17,28,0.88);
   border-bottom: 1px solid var(--border);
 }
 
@@ -110,7 +111,7 @@ input {
 .status-running {
   background: var(--accent-soft);
   color: var(--accent);
-  border-color: rgba(167,139,250,0.24);
+  border-color: rgba(56,189,248,0.24);
 }
 
 .status-running::before,
@@ -167,11 +168,11 @@ input {
   padding: 8px 14px;
   background: var(--accent-soft);
   color: var(--accent);
-  border-color: rgba(167,139,250,0.25);
+  border-color: rgba(56,189,248,0.25);
 }
 
 .btn-accent:hover {
-  background: rgba(167,139,250,0.16);
+  background: rgba(56,189,248,0.18);
 }
 
 .page {
@@ -202,9 +203,10 @@ input {
 .stat-card,
 .section-card,
 .modal-box {
-  background: linear-gradient(180deg, rgba(21,21,25,0.98), rgba(17,17,20,0.98));
+  background: linear-gradient(180deg, rgba(20,34,53,0.95), rgba(13,23,36,0.98));
   border: 1px solid var(--border);
   border-radius: 18px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.18);
 }
 
 .stat-card {
@@ -260,6 +262,39 @@ input {
   font-weight: 500;
 }
 
+.trade-tabs {
+  margin-bottom: 12px;
+}
+
+.trade-tabs .tab {
+  background: transparent !important;
+  border: 0 !important;
+  padding: 0 !important;
+}
+
+.trade-tab {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 12px !important;
+  margin-right: 8px;
+  border-radius: 999px  !important;
+  color: var(--muted) !important;
+  background: rgba(255,255,255,0.03) !important;
+  border: 1px solid rgba(255,255,255,0.05) !important;
+  font-size: 12px;
+}
+
+.trade-tab-selected {
+  color: var(--text) !important;
+  background: rgba(56,189,248,0.12) !important;
+  border-color: rgba(56,189,248,0.32) !important;
+}
+
+.trade-book-table {
+  overflow-x: auto;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -280,7 +315,7 @@ tbody tr:nth-child(even) {
 }
 
 tbody tr:hover {
-  background: rgba(167,139,250,0.05);
+  background: rgba(56,189,248,0.07);
 }
 
 tbody td {
@@ -296,7 +331,7 @@ tbody td {
 }
 
 .mono {
-  font-family: 'Roboto Mono', monospace;
+  font-family: 'IBM Plex Mono', monospace;
 }
 
 .chart {
@@ -396,8 +431,8 @@ tbody td {
 
 .settings-input:focus {
   outline: none;
-  border-color: rgba(167,139,250,0.42);
-  box-shadow: 0 0 0 3px rgba(167,139,250,0.12);
+  border-color: rgba(56,189,248,0.42);
+  box-shadow: 0 0 0 3px rgba(56,189,248,0.12);
 }
 
 @media (max-width: 1100px) {
@@ -424,4 +459,3 @@ tbody td {
     text-align: left;
   }
 }
-

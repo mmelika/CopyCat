@@ -46,6 +46,11 @@ def fmt_number(value, digits=2) -> str:
     return f"{float(value):,.{digits}f}"
 
 
+def fmt_signed_currency(value) -> str:
+    amount = float(value)
+    return f"{'+' if amount > 0 else ''}${amount:,.2f}"
+
+
 def status_class(status: str) -> str:
     return "status-running" if status == "RUNNING" else "status-stopped"
 
@@ -99,6 +104,31 @@ def section(title: str, body_id: str, badge_id: str | None = None, graph: bool =
     return html.Div(
         className="section-card",
         children=[html.Div(className="section-header", children=header_children), body],
+    )
+
+
+def trade_views():
+    return html.Div(
+        className="section-card",
+        children=[
+            html.Div(
+                className="section-header",
+                children=[
+                    html.Span("Trade Book", className="section-title"),
+                    html.Span(id="trade-book-badge", className="badge"),
+                ],
+            ),
+            dcc.Tabs(
+                id="trade-tabs",
+                value="open-trades",
+                className="trade-tabs",
+                children=[
+                    dcc.Tab(label="Open Trades", value="open-trades", className="trade-tab", selected_className="trade-tab-selected"),
+                    dcc.Tab(label="Closed Trades", value="closed-trades", className="trade-tab", selected_className="trade-tab-selected"),
+                ],
+            ),
+            html.Div(id="trade-book-table", className="trade-book-table"),
+        ],
     )
 
 
@@ -201,6 +231,7 @@ app.layout = html.Div(
                             children=[
                                 section("Source Positions", "source-positions-table", "source-positions-badge"),
                                 section("Paper Portfolio Curve", "portfolio-chart", graph=True),
+                                section("Daily Performance", "daily-performance-table", "daily-performance-badge"),
                                 section("Sync History", "sync-history-table", "sync-history-badge"),
                             ],
                         ),
@@ -208,6 +239,7 @@ app.layout = html.Div(
                             className="dashboard-col",
                             children=[
                                 section("Copied Trades", "copied-trades-table", "copied-trades-badge"),
+                                trade_views(),
                                 section("Live Analysis", "analysis-panel"),
                                 section("Engine Log", "engine-log-table", "engine-log-badge"),
                             ],
@@ -237,18 +269,42 @@ def render_table(headers, rows):
 
 def portfolio_chart():
     snapshots = database.list_portfolio_snapshots(DB_PATH, limit=80)
-    x_values = [row["ts"][-8:] for row in snapshots]
+    if not snapshots:
+        snapshots = [{"ts": "-", "net_value": 0.0}]
+    baseline = float(snapshots[0]["net_value"] or 0.0)
+    x_values = [row["ts"][5:16].replace("T", " ") for row in snapshots]
     y_values = [row["net_value"] for row in snapshots]
+    colors = ["#22c55e" if value >= baseline else "#ef4444" for value in y_values]
     figure = go.Figure()
     figure.add_trace(
         go.Scatter(
             x=x_values,
             y=y_values,
             mode="lines",
-            line={"color": "#a78bfa", "width": 3},
+            line={"color": "#22c55e" if y_values[-1] >= baseline else "#ef4444", "width": 3},
             fill="tozeroy",
-            fillcolor="rgba(167,139,250,0.10)",
+            fillcolor="rgba(34,197,94,0.12)" if y_values[-1] >= baseline else "rgba(239,68,68,0.12)",
             hovertemplate="%{y:$,.2f}<extra></extra>",
+        )
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=x_values,
+            y=[baseline for _ in y_values],
+            mode="lines",
+            line={"color": "rgba(255,255,255,0.18)", "width": 1, "dash": "dot"},
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=x_values,
+            y=y_values,
+            mode="markers",
+            marker={"color": colors, "size": 6, "line": {"width": 0}},
+            hovertemplate="%{y:$,.2f}<extra></extra>",
+            showlegend=False,
         )
     )
     figure.update_layout(
@@ -256,8 +312,18 @@ def portfolio_chart():
         plot_bgcolor="#111114",
         margin={"l": 18, "r": 18, "t": 8, "b": 24},
         font={"color": "#a1a1aa", "family": "Inter"},
-        xaxis={"showgrid": False, "zeroline": False},
-        yaxis={"gridcolor": "rgba(255,255,255,0.06)", "zeroline": False},
+        xaxis={"showgrid": False, "zeroline": False, "showline": False, "tickfont": {"size": 10}},
+        yaxis={"gridcolor": "rgba(255,255,255,0.06)", "zeroline": False, "tickprefix": "$"},
+    )
+    figure.add_annotation(
+        x=x_values[-1],
+        y=y_values[-1],
+        text=fmt_signed_currency(y_values[-1] - baseline),
+        showarrow=False,
+        xanchor="left",
+        yanchor="bottom",
+        font={"color": "#22c55e" if y_values[-1] >= baseline else "#ef4444", "size": 12},
+        bgcolor="#111114",
     )
     return figure
 
@@ -279,16 +345,21 @@ def portfolio_chart():
     Output("source-positions-badge", "children"),
     Output("source-positions-table", "children"),
     Output("portfolio-chart", "figure"),
+    Output("daily-performance-badge", "children"),
+    Output("daily-performance-table", "children"),
     Output("sync-history-badge", "children"),
     Output("sync-history-table", "children"),
     Output("copied-trades-badge", "children"),
     Output("copied-trades-table", "children"),
+    Output("trade-book-badge", "children"),
+    Output("trade-book-table", "children"),
     Output("analysis-panel", "children"),
     Output("engine-log-badge", "children"),
     Output("engine-log-table", "children"),
     Input("refresh-interval", "n_intervals"),
+    Input("trade-tabs", "value"),
 )
-def refresh_dashboard(_):
+def refresh_dashboard(_, trade_tab):
     settings = database.get_settings(DB_PATH)
     app_state = database.get_app_state(DB_PATH)
     source_positions = database.list_source_positions(10, DB_PATH)
@@ -297,6 +368,8 @@ def refresh_dashboard(_):
     sync_runs = database.list_sync_runs(12, DB_PATH)
     logs = database.list_logs(14, DB_PATH)
     portfolio = database.portfolio_totals(DB_PATH)
+    analytics = database.trade_analytics(DB_PATH)
+    daily_performance = database.daily_portfolio_performance(DB_PATH)[:12]
 
     copied_notional = sum(row["requested_amount_usd"] for row in copy_orders if row["status"] == "FILLED")
     source_position_rows = [
@@ -320,6 +393,43 @@ def refresh_dashboard(_):
         ]
         for row in copy_orders
     ] or [["No copied trades yet", "-", "-", "-", "-", "-"]]
+    daily_rows = [
+        [
+            row["date"],
+            fmt_signed_currency(row["day_change"]),
+            fmt_currency(row["net_value"]),
+        ]
+        for row in daily_performance
+    ] or [["No daily performance yet", "-", "-"]]
+
+    open_trade_rows = [
+        [
+            row["market_title"][:30],
+            row["outcome"],
+            fmt_number(row["shares"], 2),
+            fmt_currency(row["cost_basis"]),
+            fmt_currency(row["market_value"]),
+            fmt_signed_currency(row["unrealized_pnl"]),
+        ]
+        for row in analytics["open_trades"][:20]
+    ] or [["No open trades", "-", "-", "-", "-", "-"]]
+    closed_trade_rows = [
+        [
+            row["market_title"][:26],
+            row["outcome"],
+            fmt_number(row["shares"], 2),
+            fmt_currency(row["cost_basis"]),
+            fmt_currency(row["proceeds"]),
+            fmt_signed_currency(row["pnl"]),
+        ]
+        for row in analytics["closed_trades"][:20]
+    ] or [["No closed trades", "-", "-", "-", "-", "-"]]
+    trade_book_table = (
+        render_table(["Market", "Outcome", "Shares", "Cost", "Value", "P/L"], open_trade_rows)
+        if trade_tab == "open-trades"
+        else render_table(["Market", "Outcome", "Shares", "Cost", "Proceeds", "P/L"], closed_trade_rows)
+    )
+    trade_book_count = len(analytics["open_trades"]) if trade_tab == "open-trades" else len(analytics["closed_trades"])
     sync_rows = [
         [
             row["started_at"][11:19] if row["started_at"] else "-",
@@ -413,14 +523,18 @@ def refresh_dashboard(_):
         fmt_currency(copied_notional),
         f"Cash {fmt_currency(portfolio['cash_balance'])} / Exposure {fmt_currency(portfolio['gross_exposure'])}",
         fmt_currency(portfolio["net_value"]),
-        f"{portfolio['positions_count']} open local positions",
+        f"{fmt_signed_currency(portfolio['total_gain'])} ({portfolio['total_gain_pct']:+.2f}%) vs start",
         str(len(source_positions)),
         render_table(["Market", "Outcome", "Shares", "Notional", "Price"], source_position_rows),
         portfolio_chart(),
+        str(len(daily_performance)),
+        render_table(["Date", "Day Change", "Portfolio"], daily_rows),
         str(len(sync_runs)),
         render_table(["Time", "Status", "Seen", "New", "Copied", "Latency"], sync_rows),
         str(len(copy_orders)),
         render_table(["Market", "Outcome", "Side", "USD", "Px", "Status"], copied_trade_rows),
+        str(trade_book_count),
+        trade_book_table,
         analysis,
         str(len(logs)),
         render_table(["Time", "Level", "Comp", "Message"], log_rows),
