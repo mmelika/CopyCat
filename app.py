@@ -16,7 +16,18 @@ database.init_db(DB_PATH)
 engine = CopyTradingEngine(DB_PATH)
 engine.start()
 
-app = dash.Dash(__name__, suppress_callback_exceptions=True)
+base_path = os.environ.get("DASH_URL_BASE_PATHNAME", "/").strip() or "/"
+if not base_path.startswith("/"):
+    base_path = f"/{base_path}"
+if not base_path.endswith("/"):
+    base_path = f"{base_path}/"
+
+app = dash.Dash(
+    __name__,
+    suppress_callback_exceptions=True,
+    requests_pathname_prefix=base_path,
+    routes_pathname_prefix=base_path,
+)
 app.title = "CopyPelosi"
 server = app.server
 
