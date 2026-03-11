@@ -322,6 +322,187 @@ def trade_views():
     )
 
 
+def live_tab():
+    def section_header(title_id, meta_id):
+        return html.Div(
+            className="live-section-header",
+            children=[
+                html.Div(id=title_id, className="live-section-title"),
+                html.Div(id=meta_id, className="live-section-meta"),
+            ],
+        )
+
+    return html.Div(
+        className="tab-content",
+        children=[
+            html.Div(
+                className="live-grid",
+                children=[
+                    html.Div(
+                        className="live-col",
+                        children=[
+                            section_header("live-leader-title", "live-leader-meta"),
+                            html.Div(className="live-table-wrap", children=[html.Div(id="live-source-positions-table")]),
+                            section_header("live-trades-title", "live-trades-meta"),
+                            html.Div(className="live-table-wrap", children=[html.Div(id="live-source-trades-table")]),
+                        ],
+                    ),
+                    html.Div(
+                        className="live-col",
+                        children=[
+                            section_header("live-copies-title", "live-copies-meta"),
+                            html.Div(className="live-table-wrap", children=[html.Div(id="live-open-positions-table")]),
+                            section_header("live-orders-title", "live-orders-meta"),
+                            html.Div(className="live-table-wrap", children=[html.Div(id="live-copy-orders-table")]),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    )
+
+
+def portfolio_tab():
+    return html.Div(
+        className="tab-content",
+        children=[
+            html.Div(
+                className="section-card",
+                children=[
+                    html.Div(className="section-header", children=[html.Span("Paper Portfolio Curve", className="section-title")]),
+                    dcc.Graph(id="portfolio-chart", config={"displayModeBar": False}, className="chart"),
+                ],
+            ),
+            html.Div(
+                className="section-card",
+                children=[
+                    html.Div(
+                        className="section-header",
+                        children=[
+                            html.Span("Daily Performance", className="section-title"),
+                            html.Span(id="daily-performance-badge", className="badge"),
+                        ],
+                    ),
+                    html.Div(id="daily-performance-table"),
+                ],
+            ),
+        ],
+    )
+
+
+def history_tab():
+    return html.Div(
+        className="tab-content",
+        children=[
+            html.Div(
+                className="section-card",
+                children=[
+                    html.Div(
+                        className="section-header",
+                        children=[
+                            html.Span("Closed Trades", className="section-title"),
+                            html.Span(id="closed-trades-badge", className="badge"),
+                        ],
+                    ),
+                    html.Div(id="closed-trades-table"),
+                ],
+            ),
+            html.Div(
+                className="section-card",
+                children=[
+                    html.Div(
+                        className="section-header",
+                        children=[
+                            html.Span("Sync History", className="section-title"),
+                            html.Span(id="sync-history-badge", className="badge"),
+                        ],
+                    ),
+                    html.Div(id="sync-history-table"),
+                ],
+            ),
+        ],
+    )
+
+
+def settings_tab_content():
+    field = lambda label, fid, placeholder: html.Div(
+        className="settings-field",
+        children=[
+            html.Div(label, className="settings-label"),
+            dcc.Input(id=fid, className="settings-input", placeholder=placeholder, debounce=False),
+        ],
+    )
+    return html.Div(
+        className="tab-content",
+        children=[
+            html.Div(
+                className="settings-inline",
+                children=[
+                    html.Div("Target", className="settings-section-label"),
+                    html.Div(
+                        className="settings-grid-3",
+                        children=[
+                            field("Target Handle", "settings-target-handle", "@GamblingIsAllYouNeed"),
+                            field("Target Wallet (optional)", "settings-target-wallet", "0x..."),
+                            field("Reference Wallet", "settings-leader-wallet", "0xBEbe..."),
+                        ],
+                    ),
+                    html.Div("Capital", className="settings-section-label"),
+                    html.Div(
+                        className="settings-grid-2",
+                        children=[
+                            field("Paper Starting Balance", "settings-start-balance", "100"),
+                            field("Paper Cash Balance", "settings-cash-balance", "100"),
+                        ],
+                    ),
+                    html.Div(
+                        className="add-money-row",
+                        children=[
+                            html.Div(
+                                className="settings-field",
+                                style={"flex": 1},
+                                children=[
+                                    html.Div("Add Paper Money", className="settings-label"),
+                                    dcc.Input(
+                                        id="add-paper-money-input",
+                                        className="settings-input",
+                                        placeholder="50.00",
+                                        type="number",
+                                        min=0,
+                                        debounce=False,
+                                    ),
+                                ],
+                            ),
+                            html.Button("+ Add", id="add-paper-money-btn", className="btn-accent", n_clicks=0),
+                        ],
+                    ),
+                    html.Div(id="add-money-status", className="add-money-status"),
+                    html.Div("Execution", className="settings-section-label"),
+                    html.Div(
+                        className="settings-grid-2",
+                        children=[
+                            field("Max Total Exposure USD", "settings-max-exposure", "100"),
+                            field("Slippage Bps", "settings-slippage-bps", "30"),
+                        ],
+                    ),
+                    html.Div(
+                        className="settings-grid-3",
+                        children=[
+                            field("Sync Interval ms", "settings-sync-interval", "1200"),
+                            field("Trade Fetch Limit", "settings-trade-limit", "100"),
+                            field("Copy Sells (1/0)", "settings-copy-sells", "1"),
+                        ],
+                    ),
+                    html.Div(
+                        className="settings-save-row",
+                        children=[html.Button("Save Settings", id="save-settings-btn", className="btn-accent", n_clicks=0)],
+                    ),
+                ],
+            ),
+        ],
+    )
+
+
 def settings_modal():
     field = lambda label, field_id, placeholder, value=None: html.Div(
         className="settings-field",
