@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -27,6 +28,38 @@ def pacific_day(value: str) -> str:
 
 def _json(value):
     return json.dumps(value, separators=(",", ":"))
+
+
+def _normalize_text(value: str) -> str:
+    text = (value or "").strip().lower()
+    return re.sub(r"[^a-z0-9]+", " ", text).strip()
+
+
+def _record_payload(record: dict) -> dict:
+    raw_json = record.get("raw_json")
+    if not raw_json:
+        return {}
+    try:
+        payload = json.loads(raw_json)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _position_aliases(record: dict) -> set[str]:
+    payload = _record_payload(record)
+    outcome = _normalize_text(record.get("outcome") or payload.get("outcome") or payload.get("outcomeName") or "")
+    aliases = set()
+    position_key = (record.get("position_key") or "").strip()
+    if position_key:
+        aliases.add(f"pk:{position_key}")
+    market_slug = (record.get("market_slug") or payload.get("market_slug") or payload.get("marketSlug") or payload.get("slug") or "").strip().lower()
+    if market_slug and outcome:
+        aliases.add(f"slug:{market_slug}|{outcome}")
+    market_title = _normalize_text(record.get("market_title") or payload.get("market_title") or payload.get("marketTitle") or payload.get("title") or "")
+    if market_title and outcome:
+        aliases.add(f"title:{market_title}|{outcome}")
+    return aliases
 
 
 @contextmanager
@@ -648,12 +681,33 @@ def _find_source_price_map(db_path: Path | str = DB_PATH) -> dict[tuple[str, str
     return prices
 
 
+def _find_source_price_alias_map(db_path: Path | str = DB_PATH) -> dict[str, float]:
+    prices = {}
+    for row in list_source_positions(1000, db_path):
+        try:
+            price = float(row.get("price") or 0.0)
+        except (TypeError, ValueError):
+            price = 0.0
+        if price <= 0:
+            continue
+        for alias in _position_aliases(row):
+            prices[alias] = price
+    return prices
+
+
 def list_local_positions_marked(db_path: Path | str = DB_PATH) -> list[dict]:
     positions = get_local_positions(db_path)
     price_map = _find_source_price_map(db_path)
+    alias_price_map = _find_source_price_alias_map(db_path)
     marked = []
     for row in positions:
         current_price = price_map.get((row.get("market_slug") or "", row.get("outcome") or ""))
+        if current_price is None or current_price <= 0:
+            for alias in _position_aliases(row):
+                aliased_price = alias_price_map.get(alias)
+                if aliased_price and aliased_price > 0:
+                    current_price = aliased_price
+                    break
         if current_price is None or current_price <= 0:
             current_price = float(row.get("avg_price") or 0.0)
         shares = float(row.get("shares") or 0.0)
