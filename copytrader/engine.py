@@ -4,6 +4,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from . import database
 from .config import DB_PATH
@@ -168,20 +169,24 @@ class CopyTradingEngine:
             profile = self.client.resolve_target_wallet(target)
             trades = self.client.fetch_trades(profile["wallet"], handle=profile["handle"], limit=int(settings["trade_fetch_limit"]))
             positions = self.client.fetch_positions(profile["wallet"], limit=100)
+            leader_wallet_value = self._get_leader_wallet_value(settings, profile["wallet"], positions)
             trades_seen = len(trades)
             trade_ids = [trade["source_trade_id"] for trade in trades]
             existing_trade_ids = database.get_existing_source_trade_ids(trade_ids, self.db_path)
             fresh_trades = [trade for trade in trades if trade["source_trade_id"] not in existing_trade_ids]
+            eligible_fresh_trades, prestart_trades = self._split_by_copy_start(fresh_trades, app_state.get("copy_start_at", ""))
             new_trades = len(fresh_trades)
 
             copied, failed = self._copy_trades_first(
-                sorted(fresh_trades, key=lambda item: item["created_at"], reverse=True),
+                sorted(eligible_fresh_trades, key=lambda item: item["created_at"], reverse=True),
                 settings,
+                leader_wallet_value,
             )
             database.upsert_source_trades(trades, self.db_path)
-            self._finalize_fresh_trade_records(fresh_trades)
+            self._finalize_fresh_trade_records(eligible_fresh_trades)
+            self._mark_prestart_trades(prestart_trades, app_state.get("copy_start_at", ""))
             database.upsert_source_positions(positions, self.db_path)
-            backlog_copied, backlog_failed = self._copy_pending(settings)
+            backlog_copied, backlog_failed = self._copy_pending(settings, leader_wallet_value, app_state.get("copy_start_at", ""))
             copied += backlog_copied
             failed += backlog_failed
             portfolio = database.portfolio_totals(self.db_path)
@@ -193,6 +198,8 @@ class CopyTradingEngine:
                 self.db_path,
             )
             database.set_app_state("resolved_target_wallet", profile["wallet"], self.db_path)
+            database.set_app_state("leader_wallet_value", f"{leader_wallet_value:.8f}", self.db_path)
+            database.set_app_state("leader_wallet_updated_at", database.utc_now(), self.db_path)
             database.set_app_state("last_sync_at", database.utc_now(), self.db_path)
             database.set_app_state("last_sync_message", f"Synced {trades_seen} source trades, copied {copied}.", self.db_path)
             database.set_app_state("last_error", "", self.db_path)
@@ -219,12 +226,12 @@ class CopyTradingEngine:
         )
         return {"status": status, "message": message, "latency_ms": latency_ms}
 
-    def _copy_trades_first(self, trades: list[dict], settings: dict) -> tuple[int, int]:
+    def _copy_trades_first(self, trades: list[dict], settings: dict, leader_wallet_value: float) -> tuple[int, int]:
         copied = 0
         failed = 0
         self._latest_results = []
         for trade in trades:
-            decision = self._decide_copy_trade(trade, settings)
+            decision = self._decide_copy_trade(trade, settings, leader_wallet_value)
             result = {
                 "trade_id": trade["source_trade_id"],
                 "copy_status": "skipped",
@@ -281,11 +288,19 @@ class CopyTradingEngine:
                 self.db_path,
             )
 
-    def _copy_pending(self, settings: dict) -> tuple[int, int]:
+    def _copy_pending(self, settings: dict, leader_wallet_value: float, copy_start_at: str) -> tuple[int, int]:
         copied = 0
         failed = 0
         for trade in database.list_pending_source_trades(self.db_path):
-            decision = self._decide_copy_trade(trade, settings)
+            if self._is_before_start(trade["created_at"], copy_start_at):
+                database.mark_source_trade(
+                    trade["source_trade_id"],
+                    "ignored",
+                    last_error=f"Trade happened before copy start {copy_start_at}.",
+                    db_path=self.db_path,
+                )
+                continue
+            decision = self._decide_copy_trade(trade, settings, leader_wallet_value)
             if decision.action == "skip":
                 database.mark_source_trade(trade["source_trade_id"], "skipped", last_error=decision.reason, db_path=self.db_path)
                 database.log("INFO", "copy", f"Skipped {trade['source_trade_id']}.", {"reason": decision.reason}, self.db_path)
@@ -308,16 +323,20 @@ class CopyTradingEngine:
                 database.log("ERROR", "copy", f"Copy failed for {trade['source_trade_id']}.", {"error": str(exc)}, self.db_path)
         return copied, failed
 
-    def _decide_copy_trade(self, trade: dict, settings: dict) -> CopyDecision:
+    def _decide_copy_trade(self, trade: dict, settings: dict, leader_wallet_value: float) -> CopyDecision:
         side = trade["side"]
         amount_usd = float(trade.get("amount_usd") or 0.0)
         copy_ratio = max(float(settings["copy_ratio"]), 0.0)
         max_trade = max(float(settings["max_copy_trade_usd"]), 0.0)
         portfolio = database.portfolio_totals(self.db_path)
-        requested_amount = round(min(amount_usd * copy_ratio, max_trade), 2)
+        if leader_wallet_value <= 0:
+            return CopyDecision("skip", "Leader wallet value is unavailable.")
+        local_equity = max(float(portfolio["net_value"]), 0.0)
+        proportional_amount = amount_usd / leader_wallet_value * local_equity * copy_ratio
+        requested_amount = round(min(proportional_amount, max_trade), 2)
 
-        if requested_amount < 1:
-            return CopyDecision("skip", "Trade size is below minimum copy threshold.")
+        if requested_amount < 0.01:
+            return CopyDecision("skip", "Trade size is below minimum copy threshold after wallet scaling.")
 
         if side == "SELL" and not int(settings["copy_sells"]):
             return CopyDecision("skip", "Sell copying disabled.")
@@ -325,7 +344,7 @@ class CopyTradingEngine:
         if side == "BUY":
             remaining_exposure = round(float(settings["max_total_exposure_usd"]) - portfolio["gross_exposure"], 2)
             requested_amount = min(requested_amount, portfolio["cash_balance"], remaining_exposure)
-            if requested_amount < 1:
+            if requested_amount < 0.01:
                 return CopyDecision("skip", "No remaining buying capacity.")
             return CopyDecision("copy", "Buy trade eligible.", requested_amount_usd=requested_amount)
 
@@ -336,6 +355,54 @@ class CopyTradingEngine:
         price = max(float(trade.get("price") or 0.0), 0.01)
         max_sell_notional = round(float(local_position["shares"]) * price, 2)
         requested_amount = min(requested_amount, max_sell_notional)
-        if requested_amount < 1:
+        if requested_amount < 0.01:
             return CopyDecision("skip", "Remaining position is too small to sell.")
         return CopyDecision("copy", "Sell trade eligible.", requested_amount_usd=requested_amount)
+
+    def _get_leader_wallet_value(self, settings: dict, profile_wallet: str, target_positions: list[dict]) -> float:
+        reference_wallet = (settings.get("leader_wallet_address") or profile_wallet or "").strip()
+        app_state = database.get_app_state(self.db_path)
+        cached_value = float(app_state.get("leader_wallet_value") or 0.0)
+        updated_at = app_state.get("leader_wallet_updated_at") or ""
+        if updated_at:
+            try:
+                age_seconds = (datetime.now(timezone.utc) - datetime.fromisoformat(updated_at.replace("Z", "+00:00"))).total_seconds()
+                if age_seconds < 15 and cached_value > 0:
+                    return cached_value
+            except ValueError:
+                pass
+
+        if reference_wallet.lower() == (profile_wallet or "").lower():
+            return round(sum(float(item.get("notional_usd") or 0.0) for item in target_positions), 8)
+
+        positions = self.client.fetch_positions(reference_wallet, limit=200)
+        return round(sum(float(item.get("notional_usd") or 0.0) for item in positions), 8)
+
+    def _split_by_copy_start(self, trades: list[dict], copy_start_at: str) -> tuple[list[dict], list[dict]]:
+        eligible = []
+        ignored = []
+        for trade in trades:
+            if self._is_before_start(trade["created_at"], copy_start_at):
+                ignored.append(trade)
+            else:
+                eligible.append(trade)
+        return eligible, ignored
+
+    def _mark_prestart_trades(self, trades: list[dict], copy_start_at: str) -> None:
+        for trade in trades:
+            database.mark_source_trade(
+                trade["source_trade_id"],
+                "ignored",
+                last_error=f"Trade happened before copy start {copy_start_at}.",
+                db_path=self.db_path,
+            )
+
+    def _is_before_start(self, created_at: str, copy_start_at: str) -> bool:
+        if not copy_start_at:
+            return False
+        try:
+            trade_time = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            start_time = datetime.fromisoformat(copy_start_at.replace("Z", "+00:00"))
+            return trade_time <= start_time
+        except ValueError:
+            return False

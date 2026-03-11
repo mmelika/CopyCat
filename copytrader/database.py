@@ -547,3 +547,39 @@ def portfolio_totals(db_path: Path | str = DB_PATH) -> dict:
         "positions_count": len(positions),
         "realized_pnl": realized_pnl,
     }
+
+
+def reset_runtime_state(
+    *,
+    starting_balance: float,
+    copy_start_at: str,
+    leader_wallet_address: str,
+    db_path: Path | str = DB_PATH,
+) -> None:
+    with connect(db_path) as conn:
+        for table in ("source_trades", "source_positions", "copy_orders", "local_positions", "portfolio_snapshots", "sync_runs", "logs"):
+            conn.execute(f"DELETE FROM {table}")
+    update_settings(
+        {
+            "paper_starting_balance": round(float(starting_balance), 2),
+            "paper_cash_balance": round(float(starting_balance), 2),
+            "max_copy_trade_usd": round(float(starting_balance), 2),
+            "max_total_exposure_usd": round(float(starting_balance), 2),
+            "leader_wallet_address": leader_wallet_address,
+        },
+        db_path,
+    )
+    set_app_state("copy_start_at", copy_start_at, db_path)
+    set_app_state("last_sync_at", "", db_path)
+    set_app_state("last_sync_message", f"Fresh start from {copy_start_at}. Waiting for new source trades.", db_path)
+    set_app_state("last_error", "", db_path)
+    set_app_state("leader_wallet_value", "0", db_path)
+    set_app_state("leader_wallet_updated_at", "", db_path)
+    snapshot_portfolio(starting_balance, 0.0, starting_balance, 0, db_path)
+    log(
+        "INFO",
+        "reset",
+        "Runtime state reset for fresh copy session.",
+        {"starting_balance": starting_balance, "copy_start_at": copy_start_at, "leader_wallet_address": leader_wallet_address},
+        db_path,
+    )

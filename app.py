@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import os
 
 import dash
 import plotly.graph_objects as go
@@ -115,6 +116,7 @@ def settings_modal():
                                 children=[
                                     field("Target Handle", "settings-target-handle", "@GamblingIsAllYouNeed"),
                                     field("Target Wallet (optional)", "settings-target-wallet", "0x..."),
+                                    field("Leader Wallet Address", "settings-leader-wallet", "0xBEbe..."),
                                 ],
                             ),
                             html.Div("Execution", className="modal-section-label"),
@@ -347,10 +349,28 @@ def refresh_dashboard(_):
                     html.Div("Fast Copy Model", className="analysis-label"),
                     html.Div(
                         f"Polling every {settings['sync_interval_ms']}ms with {settings['trade_fetch_limit']} trade lookback. "
-                        f"Paper execution sizes at {settings['copy_ratio']}x leader flow, capped at {fmt_currency(settings['max_copy_trade_usd'])}. "
+                        f"Paper execution sizes as proportional wallet slices against {settings['leader_wallet_address']}, "
+                        f"scaled by {settings['copy_ratio']}x and capped at {fmt_currency(settings['max_copy_trade_usd'])}. "
                         f"The dashboard refreshes separately and never gates copy execution.",
                         className="analysis-text",
                     ),
+                ],
+            ),
+            html.Div(
+                className="analysis-block",
+                children=[
+                    html.Div("Leader Wallet Value", className="analysis-label"),
+                    html.Div(
+                        fmt_currency(float(app_state.get("leader_wallet_value") or 0.0)),
+                        className="analysis-text mono",
+                    ),
+                ],
+            ),
+            html.Div(
+                className="analysis-block",
+                children=[
+                    html.Div("Copy Start Time", className="analysis-label"),
+                    html.Div(app_state.get("copy_start_at") or "Immediate", className="analysis-text mono"),
                 ],
             ),
             html.Div(
@@ -410,6 +430,7 @@ def toggle_modal(open_clicks, close_clicks, store):
     Output("settings-modal", "className"),
     Output("settings-target-handle", "value"),
     Output("settings-target-wallet", "value"),
+    Output("settings-leader-wallet", "value"),
     Output("settings-copy-ratio", "value"),
     Output("settings-max-copy-trade", "value"),
     Output("settings-max-exposure", "value"),
@@ -428,6 +449,7 @@ def sync_modal(store, _):
         "modal-overlay" if store["open"] else "modal-overlay hidden",
         settings["target_handle"],
         settings["target_wallet"],
+        settings["leader_wallet_address"],
         settings["copy_ratio"],
         settings["max_copy_trade_usd"],
         settings["max_total_exposure_usd"],
@@ -445,6 +467,7 @@ def sync_modal(store, _):
     Input("save-settings-btn", "n_clicks"),
     State("settings-target-handle", "value"),
     State("settings-target-wallet", "value"),
+    State("settings-leader-wallet", "value"),
     State("settings-copy-ratio", "value"),
     State("settings-max-copy-trade", "value"),
     State("settings-max-exposure", "value"),
@@ -456,10 +479,11 @@ def sync_modal(store, _):
     State("settings-copy-sells", "value"),
     prevent_initial_call=True,
 )
-def save_settings(_, target_handle, target_wallet, copy_ratio, max_copy_trade, max_exposure, start_balance, cash_balance, slippage_bps, sync_interval, trade_limit, copy_sells):
+def save_settings(_, target_handle, target_wallet, leader_wallet, copy_ratio, max_copy_trade, max_exposure, start_balance, cash_balance, slippage_bps, sync_interval, trade_limit, copy_sells):
     updates = {
         "target_handle": (target_handle or "").strip().lstrip("@"),
         "target_wallet": (target_wallet or "").strip(),
+        "leader_wallet_address": (leader_wallet or "").strip(),
         "copy_ratio": float(copy_ratio or 1.0),
         "max_copy_trade_usd": float(max_copy_trade or 0),
         "max_total_exposure_usd": float(max_exposure or 0),
@@ -497,4 +521,7 @@ def force_sync(_):
 
 
 if __name__ == "__main__":
-    app.run(debug=True, host="127.0.0.1", port=8050)
+    host = os.environ.get("HOST", "127.0.0.1")
+    port = int(os.environ.get("PORT", "8060"))
+    debug = os.environ.get("DEBUG", "").lower() in {"1", "true", "yes"}
+    app.run(debug=debug, host=host, port=port)

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import requests
+import re
 
 from .config import API_TIMEOUT_SECONDS, USER_AGENT
 
@@ -70,7 +71,26 @@ class PolymarketClient:
             if profile.get("wallet"):
                 return {"handle": profile.get("handle") or clean, "wallet": profile["wallet"]}
 
+        profile = self._resolve_from_profile_page(clean)
+        if profile.get("wallet"):
+            return profile
+
         raise RuntimeError(f"Could not resolve Polymarket profile for {clean}")
+
+    def _resolve_from_profile_page(self, handle: str) -> dict:
+        url = f"https://polymarket.com/@{handle}"
+        response = self.session.get(url, timeout=API_TIMEOUT_SECONDS)
+        response.raise_for_status()
+        html = response.text
+
+        wallet_match = re.search(r'"proxyWallet":"(0x[a-fA-F0-9]{40})"', html)
+        handle_match = re.search(r'"username":"([^"]+)"', html)
+        if wallet_match:
+            return {
+                "handle": handle_match.group(1) if handle_match else handle,
+                "wallet": wallet_match.group(1),
+            }
+        return {}
 
     def _extract_profile(self, payload: Any) -> dict:
         if isinstance(payload, list):
@@ -195,9 +215,14 @@ class PolymarketClient:
                     "side": side,
                     "price": price,
                     "shares": shares,
-                    "notional_usd": _to_float(item.get("amount") or item.get("amountUsd") or item.get("value"), round(shares * price, 4)),
+                    "notional_usd": _to_float(
+                        item.get("currentValue")
+                        or item.get("amount")
+                        or item.get("amountUsd")
+                        or item.get("value"),
+                        round(shares * price, 4),
+                    ),
                     "updated_at": _iso(item.get("updatedAt") or item.get("timestamp")),
                 }
             )
         return positions
-
