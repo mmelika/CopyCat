@@ -156,11 +156,12 @@ def topbar():
                     html.Div(
                         className="topbar-brand",
                         children=[
-                            html.Div("CopyPelosi Exchange", className="topbar-title"),
-                            html.Div("Polymarket copy execution monitor", className="topbar-subtitle"),
+                            html.Div("CopyPelosi", className="topbar-title"),
+                            html.Div("Polymarket copy monitor", className="topbar-subtitle"),
                         ],
                     ),
                     html.Span(id="status-pill", className="status-running", children="RUNNING"),
+                    html.Span(id="sync-latency-chip", className="latency-chip", children="—"),
                 ],
             ),
             html.Div(
@@ -168,11 +169,29 @@ def topbar():
                 children=[
                     html.Button("Force Sync", id="force-sync-btn", className="btn-outline", n_clicks=0),
                     html.Button("Pause", id="toggle-engine-btn", className="btn-outline", n_clicks=0),
-                    html.Button("Settings", id="open-settings-btn", className="btn-accent", n_clicks=0),
-                    html.Div(id="refresh-text", className="topbar-meta"),
-                    html.Div(id="clock", className="topbar-meta"),
                 ],
             ),
+        ],
+    )
+
+
+def stats_strip():
+    def cell(label, value_id, extra_class=""):
+        return html.Div(
+            className="stats-strip-cell",
+            children=[
+                html.Div(label, className="stats-strip-label"),
+                html.Div(id=value_id, className=f"stats-strip-value {extra_class}".strip()),
+            ],
+        )
+    return html.Div(
+        className="stats-strip",
+        children=[
+            cell("Portfolio NAV", "stat-nav"),
+            cell("Total Invested", "stat-invested"),
+            cell("Unrealized P/L", "stat-unrealized"),
+            cell("Fill Rate", "stat-fill-rate"),
+            cell("Open Positions", "stat-open-count"),
         ],
     )
 
