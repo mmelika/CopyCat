@@ -954,7 +954,7 @@ def profit_verification(db_path: Path | str = DB_PATH) -> dict:
 
     starting_balance = round(float(settings["paper_starting_balance"]), 2)
     total_buy_notional = round(sum(float(order.get("requested_amount_usd") or 0.0) for order in orders if order.get("side") == "BUY"), 2)
-    total_sell_proceeds = round(sum(float(order.get("requested_amount_usd") or 0.0) for order in orders if order.get("side") == "SELL"), 2)
+    total_sell_proceeds = round(sum(float(row.get("proceeds") or 0.0) for row in analytics["closed_trades"]), 2)
     reconstructed_cash = round(starting_balance - total_buy_notional + total_sell_proceeds, 2)
     open_market_value = round(sum(float(row.get("market_value") or 0.0) for row in analytics["open_trades"]), 2)
     reconstructed_net_value = round(reconstructed_cash + open_market_value, 2)
@@ -1023,11 +1023,12 @@ def live_profit_verification(source_positions: list[dict], db_path: Path | str =
             )
             continue
 
-        total_sell_proceeds = round(total_sell_proceeds + amount, 2)
         sell_shares = shares
         while sell_shares > 1e-9 and lots:
             lot = lots[0]
             matched_shares = min(float(lot["remaining_shares"]), sell_shares)
+            matched_proceeds = round(matched_shares * price, 2)
+            total_sell_proceeds = round(total_sell_proceeds + matched_proceeds, 2)
             closed_realized_pnl = round(closed_realized_pnl + (matched_shares * (price - float(lot["entry_price"]))), 2)
             lot["remaining_shares"] = round(float(lot["remaining_shares"]) - matched_shares, 6)
             sell_shares = round(sell_shares - matched_shares, 6)
