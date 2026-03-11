@@ -241,33 +241,31 @@ def settings_modal():
                         children=[
                             html.Div("Target", className="modal-section-label"),
                             html.Div(
-                                className="modal-row",
+                                className="modal-row modal-row-3",
                                 children=[
                                     field("Target Handle", "settings-target-handle", "@GamblingIsAllYouNeed"),
                                     field("Target Wallet (optional)", "settings-target-wallet", "0x..."),
-                                    field("Leader Wallet Address", "settings-leader-wallet", "0xBEbe..."),
+                                    field("Reference Wallet", "settings-leader-wallet", "0xBEbe..."),
                                 ],
                             ),
                             html.Div("Execution", className="modal-section-label"),
                             html.Div(
-                                className="modal-row",
-                                children=[
-                                    field("Copy Ratio", "settings-copy-ratio", "1.0"),
-                                    field("Max Copy Trade USD", "settings-max-copy-trade", "10"),
-                                    field("Max Total Exposure USD", "settings-max-exposure", "2500"),
-                                ],
-                            ),
-                            html.Div(
-                                className="modal-row",
+                                className="modal-row modal-row-2",
                                 children=[
                                     field("Paper Starting Balance", "settings-start-balance", "5000"),
                                     field("Paper Cash Balance", "settings-cash-balance", "5000"),
+                                ],
+                            ),
+                            html.Div(
+                                className="modal-row modal-row-2",
+                                children=[
+                                    field("Max Total Exposure USD", "settings-max-exposure", "2500"),
                                     field("Slippage Bps", "settings-slippage-bps", "30"),
                                 ],
                             ),
                             html.Div("Sync", className="modal-section-label"),
                             html.Div(
-                                className="modal-row",
+                                className="modal-row modal-row-3",
                                 children=[
                                     field("Sync Interval ms", "settings-sync-interval", "1200"),
                                     field("Trade Fetch Limit", "settings-trade-limit", "100"),
@@ -655,8 +653,6 @@ def toggle_modal(open_clicks, close_clicks, store):
     Output("settings-target-handle", "value"),
     Output("settings-target-wallet", "value"),
     Output("settings-leader-wallet", "value"),
-    Output("settings-copy-ratio", "value"),
-    Output("settings-max-copy-trade", "value"),
     Output("settings-max-exposure", "value"),
     Output("settings-start-balance", "value"),
     Output("settings-cash-balance", "value"),
@@ -674,8 +670,6 @@ def sync_modal(store, _):
         settings["target_handle"],
         settings["target_wallet"],
         settings["leader_wallet_address"],
-        settings["copy_ratio"],
-        settings["max_copy_trade_usd"],
         settings["max_total_exposure_usd"],
         settings["paper_starting_balance"],
         settings["paper_cash_balance"],
@@ -692,8 +686,6 @@ def sync_modal(store, _):
     State("settings-target-handle", "value"),
     State("settings-target-wallet", "value"),
     State("settings-leader-wallet", "value"),
-    State("settings-copy-ratio", "value"),
-    State("settings-max-copy-trade", "value"),
     State("settings-max-exposure", "value"),
     State("settings-start-balance", "value"),
     State("settings-cash-balance", "value"),
@@ -703,13 +695,11 @@ def sync_modal(store, _):
     State("settings-copy-sells", "value"),
     prevent_initial_call=True,
 )
-def save_settings(_, target_handle, target_wallet, leader_wallet, copy_ratio, max_copy_trade, max_exposure, start_balance, cash_balance, slippage_bps, sync_interval, trade_limit, copy_sells):
+def save_settings(_, target_handle, target_wallet, leader_wallet, max_exposure, start_balance, cash_balance, slippage_bps, sync_interval, trade_limit, copy_sells):
     updates = {
         "target_handle": (target_handle or "").strip().lstrip("@"),
         "target_wallet": (target_wallet or "").strip(),
         "leader_wallet_address": (leader_wallet or "").strip(),
-        "copy_ratio": float(copy_ratio or 1.0),
-        "max_copy_trade_usd": float(max_copy_trade or 0),
         "max_total_exposure_usd": float(max_exposure or 0),
         "paper_starting_balance": float(start_balance or 0),
         "paper_cash_balance": float(cash_balance or 0),

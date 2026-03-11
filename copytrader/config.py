@@ -12,8 +12,6 @@ DEFAULT_SETTINGS = {
     "leader_wallet_address": "0xBEbe49168Cc3FE33FD9060c6fc83355c3359A8B5",
     "sync_interval_ms": 1200,
     "trade_fetch_limit": 100,
-    "copy_ratio": 1.0,
-    "max_copy_trade_usd": 10.0,
     "max_total_exposure_usd": 100.0,
     "paper_starting_balance": 100.0,
     "paper_cash_balance": 100.0,

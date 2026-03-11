@@ -401,8 +401,15 @@ tbody td {
 }
 
 .modal-row {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
   margin-bottom: 16px;
+}
+
+.modal-row-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.modal-row-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .modal-section-label {

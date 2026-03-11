@@ -727,7 +727,6 @@ def reset_runtime_state(
         {
             "paper_starting_balance": round(float(starting_balance), 2),
             "paper_cash_balance": round(float(starting_balance), 2),
-            "max_copy_trade_usd": round(float(starting_balance), 2),
             "max_total_exposure_usd": round(float(starting_balance), 2),
             "leader_wallet_address": leader_wallet_address,
         },

@@ -22,6 +22,15 @@ def _round_up_to_cent(value: float) -> float:
     return math.ceil(value * 100) / 100.0
 
 
+def _bankroll_bet_size(bankroll: float) -> float:
+    bankroll = max(float(bankroll), 0.0)
+    if bankroll <= 0:
+        return 0.0
+    percent = 0.10 if bankroll < 100 else 0.05
+    sized_amount = min(bankroll * percent, 20.0)
+    return max(_round_up_to_cent(sized_amount), 0.01)
+
+
 @dataclass
 class CopyDecision:
     action: str
@@ -356,17 +365,10 @@ class CopyTradingEngine:
 
     def _decide_copy_trade(self, trade: dict, settings: dict, leader_wallet_value: float) -> CopyDecision:
         side = trade["side"]
-        amount_usd = float(trade.get("amount_usd") or 0.0)
-        copy_ratio = max(float(settings["copy_ratio"]), 0.0)
-        max_trade = max(float(settings["max_copy_trade_usd"]), 0.0)
         portfolio = database.portfolio_totals(self.db_path)
-        if leader_wallet_value <= 0:
-            return CopyDecision("skip", "Leader wallet value is unavailable.")
+        _ = leader_wallet_value
         local_equity = max(float(portfolio["net_value"]), 0.0)
-        proportional_amount = amount_usd / leader_wallet_value * local_equity * copy_ratio
-        if proportional_amount > 0:
-            proportional_amount = max(_round_up_to_cent(proportional_amount), 0.01)
-        requested_amount = min(proportional_amount, max_trade)
+        requested_amount = _bankroll_bet_size(local_equity)
 
         if side == "SELL" and not int(settings["copy_sells"]):
             return CopyDecision("skip", "Sell copying disabled.")
