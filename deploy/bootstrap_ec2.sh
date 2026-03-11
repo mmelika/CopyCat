@@ -6,8 +6,17 @@ PORT="${PORT:-8060}"
 WEB_SERVICE_NAME="${WEB_SERVICE_NAME:-copycat-web}"
 ENGINE_SERVICE_NAME="${ENGINE_SERVICE_NAME:-copycat-engine}"
 
-sudo apt-get update
-sudo apt-get install -y python3 python3-venv python3-pip nginx
+if command -v apt-get >/dev/null 2>&1; then
+  sudo apt-get update
+  sudo apt-get install -y python3 python3-venv python3-pip nginx
+elif command -v dnf >/dev/null 2>&1; then
+  sudo dnf install -y python3 python3-pip nginx
+elif command -v yum >/dev/null 2>&1; then
+  sudo yum install -y python3 python3-pip nginx
+else
+  echo "Unsupported package manager. Need apt-get, dnf, or yum."
+  exit 1
+fi
 
 if [ ! -d "$APP_DIR" ]; then
   echo "Missing app directory: $APP_DIR"
@@ -28,9 +37,16 @@ sudo systemctl daemon-reload
 sudo systemctl enable "$WEB_SERVICE_NAME" "$ENGINE_SERVICE_NAME"
 sudo systemctl restart "$WEB_SERVICE_NAME" "$ENGINE_SERVICE_NAME"
 
-sudo cp deploy/nginx-copycat.conf /etc/nginx/sites-available/copycat
-sudo rm -f /etc/nginx/sites-enabled/default
-sudo ln -sf /etc/nginx/sites-available/copycat /etc/nginx/sites-enabled/copycat
+if [ -d /etc/nginx/sites-available ] && [ -d /etc/nginx/sites-enabled ]; then
+  sudo cp deploy/nginx-copycat.conf /etc/nginx/sites-available/copycat
+  sudo rm -f /etc/nginx/sites-enabled/default
+  sudo ln -sf /etc/nginx/sites-available/copycat /etc/nginx/sites-enabled/copycat
+elif [ -d /etc/nginx/conf.d ]; then
+  sudo cp deploy/nginx-copycat.conf /etc/nginx/conf.d/copycat.conf
+else
+  echo "Unsupported nginx layout. Expected sites-available/sites-enabled or conf.d."
+  exit 1
+fi
 sudo nginx -t
 sudo systemctl restart nginx
 
