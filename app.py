@@ -11,7 +11,7 @@ from dash import Input, Output, State, callback_context, dcc, html
 
 from copytrader import database
 from copytrader.config import DB_PATH
-from copytrader.engine import CopyTradingEngine
+from copytrader.engine import CopyTradingEngine, _effective_exposure_cap
 
 
 database.init_db(DB_PATH)
@@ -630,6 +630,7 @@ def refresh_dashboard(_, trade_tab):
     analytics = database.trade_analytics(DB_PATH)
     daily_performance = database.daily_portfolio_performance(DB_PATH)[:12]
     daily_realized_map = {row["date"]: row["realized_pnl"] for row in analytics["daily_realized"]}
+    effective_exposure_cap = _effective_exposure_cap(settings, portfolio)
 
     active_positions_value = float(portfolio["gross_exposure"])
     source_position_rows = [
@@ -802,7 +803,7 @@ def refresh_dashboard(_, trade_tab):
         target_wallet,
         heartbeat_label(app_state, runtime_status, stale_age_seconds),
         f"{settings['sync_interval_ms']} ms",
-        fmt_currency(settings["max_total_exposure_usd"]),
+        fmt_currency(effective_exposure_cap),
         fmt_currency(float(app_state.get("leader_wallet_value") or 0.0)),
         target_label,
         target_wallet,

@@ -20,6 +20,8 @@ MAX_SINGLE_BET_CASH_PCT = 0.20
 MAX_TRADE_FETCH_LIMIT = 10
 BUY_REPLAY_GUARD_SECONDS = 15
 FRESH_FILL_MARK_GRACE_SECONDS = 5
+EXPOSURE_CAP_STEP_NET_VALUE_USD = 20.0
+EXPOSURE_CAP_STEP_INCREASE_USD = 10.0
 
 
 def _clamp(value: float, lower: float, upper: float) -> float:
@@ -108,6 +110,16 @@ def _copy_trade_size(local_equity: float, source_amount_usd: float, leader_walle
 
     # If proportional sizing would collapse into dust, deploy available cash instead.
     return effective_capacity
+
+
+def _effective_exposure_cap(settings: dict, portfolio: dict) -> float:
+    base_cap = max(float(settings.get("max_total_exposure_usd") or 0.0), 0.0)
+    starting_balance = max(float(settings.get("paper_starting_balance") or 0.0), 0.0)
+    net_value = max(float(portfolio.get("net_value") or 0.0), 0.0)
+    gains_above_start = max(net_value - starting_balance, 0.0)
+    step_count = int(gains_above_start // EXPOSURE_CAP_STEP_NET_VALUE_USD)
+    dynamic_increase = step_count * EXPOSURE_CAP_STEP_INCREASE_USD
+    return round(base_cap + dynamic_increase, 2)
 
 
 @dataclass
@@ -545,7 +557,8 @@ class CopyTradingEngine:
         portfolio = database.portfolio_totals(self.db_path)
         local_equity = max(float(portfolio["net_value"]), 0.0)
         cash_balance = float(portfolio["cash_balance"])
-        remaining_exposure = round(float(settings["max_total_exposure_usd"]) - portfolio["gross_exposure"], 2)
+        effective_exposure_cap = _effective_exposure_cap(settings, portfolio)
+        remaining_exposure = round(effective_exposure_cap - portfolio["gross_exposure"], 2)
         buying_capacity = min(float(portfolio["cash_balance"]), remaining_exposure)
         requested_amount = _copy_trade_size(local_equity, trade.get("amount_usd") or 0.0, leader_wallet_value, buying_capacity, cash_balance)
 
@@ -583,7 +596,8 @@ class CopyTradingEngine:
 
     def _raise_cash_from_winners(self, trade: dict, settings: dict, leader_wallet_value: float) -> str | None:
         portfolio = database.portfolio_totals(self.db_path)
-        remaining_exposure = round(float(settings["max_total_exposure_usd"]) - portfolio["gross_exposure"], 2)
+        effective_exposure_cap = _effective_exposure_cap(settings, portfolio)
+        remaining_exposure = round(effective_exposure_cap - portfolio["gross_exposure"], 2)
         if remaining_exposure < MIN_BET_USD:
             return None
 
@@ -701,7 +715,8 @@ class CopyTradingEngine:
 
         portfolio = database.portfolio_totals(self.db_path)
         remaining_cash = float(portfolio["cash_balance"])
-        remaining_exposure = round(float(settings["max_total_exposure_usd"]) - float(portfolio["gross_exposure"]), 2)
+        effective_exposure_cap = _effective_exposure_cap(settings, portfolio)
+        remaining_exposure = round(effective_exposure_cap - float(portfolio["gross_exposure"]), 2)
         buying_capacity = min(remaining_cash, remaining_exposure)
         if buying_capacity < MIN_BET_USD:
             database.set_app_state("bootstrap_positions_done_at", database.utc_now(), self.db_path)
