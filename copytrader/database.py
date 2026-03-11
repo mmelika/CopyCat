@@ -662,7 +662,8 @@ def list_portfolio_snapshots(db_path: Path | str = DB_PATH, limit: int = 120) ->
 
 def portfolio_totals(db_path: Path | str = DB_PATH) -> dict:
     settings = get_settings(db_path)
-    positions = list_local_positions_marked(db_path)
+    analytics = trade_analytics(db_path)
+    positions = analytics["open_positions"]
     gross_exposure = round(sum(row["market_value"] for row in positions), 2)
     cash_balance = float(settings["paper_cash_balance"])
     realized_pnl = round(sum(row["realized_pnl"] for row in positions), 2)
@@ -738,9 +739,7 @@ def _resolve_mark_price(record: dict, price_map: dict[tuple[str, str], float], a
 
 
 def list_local_positions_marked(db_path: Path | str = DB_PATH, freeze_recent_seconds: int = 0) -> list[dict]:
-    positions = get_local_positions(db_path)
-    price_map = _find_source_price_map(db_path)
-    alias_price_map = _find_source_price_alias_map(db_path)
+    positions = [dict(row) for row in trade_analytics(db_path)["open_positions"]]
     freeze_cutoff = datetime.now(timezone.utc) - timedelta(seconds=max(int(freeze_recent_seconds), 0))
     marked = []
     for row in positions:
@@ -749,19 +748,14 @@ def list_local_positions_marked(db_path: Path | str = DB_PATH, freeze_recent_sec
         updated_at = _parse_utc(row.get("updated_at") or "")
         if updated_at is not None and updated_at >= freeze_cutoff:
             current_price = avg_price
+            market_value = round(shares * current_price, 2)
+            unrealized_pnl = round(market_value - float(row.get("cost_basis") or 0.0), 2)
+            row["current_price"] = round(current_price, 4)
+            row["market_value"] = market_value
+            row["unrealized_pnl"] = unrealized_pnl
         else:
-            current_price = _resolve_mark_price(row, price_map, alias_price_map, avg_price)
-        market_value = round(shares * current_price, 2)
-        cost_basis = round(shares * avg_price, 2)
+            row["cost_basis"] = round(float(row.get("cost_basis") or 0.0), 2)
         marked_row = dict(row)
-        marked_row.update(
-            {
-                "current_price": round(current_price, 4),
-                "market_value": market_value,
-                "cost_basis": cost_basis,
-                "unrealized_pnl": round(market_value - cost_basis, 2),
-            }
-        )
         marked.append(marked_row)
     marked.sort(key=lambda row: (row["market_value"], row["updated_at"]), reverse=True)
     return marked
@@ -881,6 +875,44 @@ def trade_analytics(db_path: Path | str = DB_PATH) -> dict:
                 }
             )
 
+    aggregated_open_positions: dict[str, dict] = {}
+    for row in open_lots:
+        aggregate = aggregated_open_positions.setdefault(
+            row["position_key"],
+            {
+                "position_key": row["position_key"],
+                "market_slug": row["market_slug"],
+                "market_title": row.get("market_title"),
+                "outcome": row["outcome"],
+                "entry_time": row["entry_time"],
+                "current_price": row["current_price"],
+                "shares": 0.0,
+                "cost_basis": 0.0,
+                "market_value": 0.0,
+                "unrealized_pnl": 0.0,
+                "realized_pnl": 0.0,
+                "side": "BUY",
+                "updated_at": row["entry_time"],
+                "avg_price": 0.0,
+            },
+        )
+        aggregate["shares"] = round(float(aggregate["shares"]) + float(row["shares"]), 6)
+        aggregate["cost_basis"] = round(float(aggregate["cost_basis"]) + float(row["cost_basis"]), 2)
+        aggregate["market_value"] = round(float(aggregate["market_value"]) + float(row["market_value"]), 2)
+        aggregate["unrealized_pnl"] = round(float(aggregate["unrealized_pnl"]) + float(row["unrealized_pnl"]), 2)
+        aggregate["entry_time"] = min(aggregate["entry_time"], row["entry_time"]) if aggregate["entry_time"] else row["entry_time"]
+        aggregate["updated_at"] = max(aggregate["updated_at"], row["entry_time"]) if aggregate["updated_at"] else row["entry_time"]
+        aggregate["current_price"] = row["current_price"]
+    for aggregate in aggregated_open_positions.values():
+        shares = float(aggregate["shares"] or 0.0)
+        aggregate["avg_price"] = round((float(aggregate["cost_basis"]) / shares), 4) if shares > 0 else 0.0
+
+    realized_by_key: dict[str, float] = {}
+    for row in closed_trades:
+        realized_by_key[row["position_key"]] = round(realized_by_key.get(row["position_key"], 0.0) + float(row["pnl"]), 2)
+    for position_key, aggregate in aggregated_open_positions.items():
+        aggregate["realized_pnl"] = realized_by_key.get(position_key, 0.0)
+
     open_lots.sort(key=lambda row: row["entry_time"], reverse=True)
     closed_trades.sort(key=lambda row: row["exit_time"], reverse=True)
     daily_rows = [
@@ -889,6 +921,7 @@ def trade_analytics(db_path: Path | str = DB_PATH) -> dict:
     ]
     return {
         "open_trades": open_lots,
+        "open_positions": sorted(aggregated_open_positions.values(), key=lambda row: (row["market_value"], row["updated_at"]), reverse=True),
         "closed_trades": closed_trades,
         "daily_realized": daily_rows,
     }
