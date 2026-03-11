@@ -300,8 +300,17 @@ class CopyTradingEngine:
         try:
             target = settings["target_wallet"] or settings["target_handle"]
             profile = self.client.resolve_target_wallet(target)
+            previous_local_positions = database.get_local_positions(self.db_path)
             trades = self.client.fetch_trades(profile["wallet"], handle=profile["handle"], limit=int(settings["trade_fetch_limit"]))
             positions = self.client.fetch_positions(profile["wallet"], limit=100)
+            leader_wallet_value = self._get_leader_wallet_value(settings, profile["wallet"], positions)
+            bootstrap_copied = self._bootstrap_current_source_positions(
+                settings,
+                app_state,
+                profile,
+                positions,
+                leader_wallet_value,
+            )
             previous_positions = {
                 row["position_key"]: row
                 for row in database.list_source_positions(1000, self.db_path)
@@ -315,7 +324,6 @@ class CopyTradingEngine:
             )
             database.replace_source_positions(positions, self.db_path)
             database.refresh_local_position_market_values(self.db_path)
-            leader_wallet_value = self._get_leader_wallet_value(settings, profile["wallet"], positions)
             trades_seen = len(trades)
             all_seen_trades = trades + synthetic_sell_trades
             trade_ids = [trade["source_trade_id"] for trade in all_seen_trades]
@@ -335,7 +343,14 @@ class CopyTradingEngine:
             backlog_copied, backlog_failed = self._copy_pending(settings, leader_wallet_value, app_state.get("copy_start_at", ""))
             copied += backlog_copied
             failed += backlog_failed
+            copied += bootstrap_copied
             database.refresh_local_position_market_values(self.db_path)
+            reconciliation_mismatches = self._reconcile_source_sells(
+                previous_local_positions=previous_local_positions,
+                current_local_positions=database.get_local_positions(self.db_path),
+                source_sell_trades=all_seen_trades,
+                copy_start_at=app_state.get("copy_start_at", ""),
+            )
             portfolio = database.portfolio_totals(self.db_path)
             database.snapshot_portfolio(
                 portfolio["cash_balance"],
@@ -348,9 +363,16 @@ class CopyTradingEngine:
             database.set_app_state("leader_wallet_value", f"{leader_wallet_value:.8f}", self.db_path)
             database.set_app_state("leader_wallet_updated_at", database.utc_now(), self.db_path)
             database.set_app_state("last_sync_at", database.utc_now(), self.db_path)
-            database.set_app_state("last_sync_message", f"Synced {trades_seen} source trades, copied {copied}.", self.db_path)
-            database.set_app_state("last_error", "", self.db_path)
+            status_note = f"Synced {trades_seen} source trades, copied {copied}."
+            if reconciliation_mismatches:
+                status_note = f"{status_note} Sell mismatches: {reconciliation_mismatches}."
+                database.set_app_state("last_error", f"{reconciliation_mismatches} sell reconciliation mismatch(es) detected.", self.db_path)
+            else:
+                database.set_app_state("last_error", "", self.db_path)
+            database.set_app_state("last_sync_message", status_note, self.db_path)
             message = f"Synced {trades_seen} trades, {new_trades} new, {copied} copied."
+            if reconciliation_mismatches:
+                message = f"{message} Sell mismatches: {reconciliation_mismatches}."
             database.log("INFO", "sync", message, {"target_wallet": profile["wallet"]}, self.db_path)
             status = "SUCCESS"
         except Exception as exc:
@@ -639,6 +661,80 @@ class CopyTradingEngine:
         positions = self.client.fetch_positions(reference_wallet, limit=200)
         return round(sum(float(item.get("notional_usd") or 0.0) for item in positions), 8)
 
+    def _bootstrap_current_source_positions(
+        self,
+        settings: dict,
+        app_state: dict,
+        profile: dict,
+        positions: list[dict],
+        leader_wallet_value: float,
+    ) -> int:
+        if app_state.get("bootstrap_positions_done_at"):
+            return 0
+        if database.get_local_positions(self.db_path):
+            database.set_app_state("bootstrap_positions_done_at", database.utc_now(), self.db_path)
+            return 0
+        if database.list_copy_orders(1, self.db_path):
+            database.set_app_state("bootstrap_positions_done_at", database.utc_now(), self.db_path)
+            return 0
+        if not positions or leader_wallet_value <= 0:
+            return 0
+
+        portfolio = database.portfolio_totals(self.db_path)
+        remaining_cash = float(portfolio["cash_balance"])
+        remaining_exposure = round(float(settings["max_total_exposure_usd"]) - float(portfolio["gross_exposure"]), 2)
+        buying_capacity = min(remaining_cash, remaining_exposure)
+        if buying_capacity < MIN_BET_USD:
+            database.set_app_state("bootstrap_positions_done_at", database.utc_now(), self.db_path)
+            return 0
+
+        copied = 0
+        bootstrap_time = app_state.get("copy_start_at") or database.utc_now()
+        ordered_positions = sorted(positions, key=lambda row: float(row.get("notional_usd") or 0.0), reverse=True)
+        for position in ordered_positions:
+            if buying_capacity < MIN_BET_USD:
+                break
+            weight = float(position.get("notional_usd") or 0.0) / leader_wallet_value if leader_wallet_value > 0 else 0.0
+            if weight <= 0:
+                continue
+            requested_amount = _round_up_to_cent(float(portfolio["net_value"]) * weight)
+            requested_amount = min(requested_amount, buying_capacity)
+            if requested_amount < MIN_BET_USD:
+                continue
+            bootstrap_trade = {
+                "source_trade_id": f"bootstrap:{position['position_key']}:{bootstrap_time}",
+                "source_handle": profile.get("handle"),
+                "source_wallet": profile.get("wallet"),
+                "market_slug": position.get("market_slug"),
+                "market_title": position.get("market_title"),
+                "outcome": position.get("outcome"),
+                "side": "BUY",
+                "price": float(position.get("price") or 0.0),
+                "shares": round(requested_amount / max(float(position.get("price") or 0.0), 0.01), 6),
+                "amount_usd": requested_amount,
+                "created_at": bootstrap_time,
+                "status": "CONFIRMED",
+                "condition_id": position.get("condition_id", ""),
+                "token_id": position.get("token_id", ""),
+                "position_key": position.get("position_key", ""),
+                "match_strategy": "bootstrap-current-holdings",
+            }
+            order = self.broker.execute(bootstrap_trade, requested_amount, settings, self.db_path)
+            database.insert_copy_order(order, self.db_path)
+            copied += 1
+            buying_capacity = round(buying_capacity - requested_amount, 2)
+
+        database.set_app_state("bootstrap_positions_done_at", database.utc_now(), self.db_path)
+        if copied:
+            database.log(
+                "INFO",
+                "bootstrap",
+                "Bootstrapped current source positions into local paper inventory.",
+                {"positions_copied": copied, "bootstrap_time": bootstrap_time},
+                self.db_path,
+            )
+        return copied
+
     def _build_position_reduction_sells(
         self,
         previous_positions: dict[str, dict],
@@ -719,9 +815,12 @@ class CopyTradingEngine:
         )[0]
 
     def _find_matching_local_position(self, trade: dict) -> tuple[dict | None, str]:
-        local_positions = database.get_local_positions(self.db_path)
-        alias_index = self._build_alias_index(local_positions)
-        direct_position = database.get_local_position(f"{trade['market_slug']}:{trade['outcome']}", self.db_path)
+        return self._find_matching_position_in_records(trade, database.get_local_positions(self.db_path))
+
+    def _find_matching_position_in_records(self, trade: dict, records: list[dict]) -> tuple[dict | None, str]:
+        alias_index = self._build_alias_index(records)
+        direct_key = f"{trade['market_slug']}:{trade['outcome']}"
+        direct_position = next((row for row in records if row.get("position_key") == direct_key), None)
         if direct_position and float(direct_position.get("shares") or 0.0) > 0:
             return direct_position, "direct-position-key"
         trade_aliases = _position_aliases(trade)
@@ -734,6 +833,50 @@ class CopyTradingEngine:
         matched_alias = sorted(shared_aliases)[0]
         alias_type = matched_alias.split(":", 1)[0]
         return matched_position, f"alias-{alias_type}"
+
+    def _reconcile_source_sells(
+        self,
+        *,
+        previous_local_positions: list[dict],
+        current_local_positions: list[dict],
+        source_sell_trades: list[dict],
+        copy_start_at: str,
+    ) -> int:
+        mismatch_count = 0
+        current_by_key = {row["position_key"]: row for row in current_local_positions}
+        seen_position_keys: set[str] = set()
+        for trade in source_sell_trades:
+            if trade.get("side") != "SELL" or self._is_before_start(trade.get("created_at", ""), copy_start_at):
+                continue
+            previous_position, match_strategy = self._find_matching_position_in_records(trade, previous_local_positions)
+            if not previous_position:
+                continue
+            position_key = previous_position["position_key"]
+            if position_key in seen_position_keys:
+                continue
+            seen_position_keys.add(position_key)
+            previous_shares = float(previous_position.get("shares") or 0.0)
+            current_position = current_by_key.get(position_key)
+            current_shares = float(current_position.get("shares") or 0.0) if current_position else 0.0
+            if current_shares < previous_shares - 1e-6:
+                continue
+            mismatch_count += 1
+            database.log(
+                "ERROR",
+                "reconcile",
+                "Source sell did not reduce matched local inventory.",
+                {
+                    "source_trade_id": trade.get("source_trade_id"),
+                    "market_slug": trade.get("market_slug"),
+                    "outcome": trade.get("outcome"),
+                    "position_key": position_key,
+                    "match_strategy": trade.get("match_strategy") or match_strategy,
+                    "previous_local_shares": round(previous_shares, 6),
+                    "current_local_shares": round(current_shares, 6),
+                },
+                self.db_path,
+            )
+        return mismatch_count
 
     def _split_by_copy_start(self, trades: list[dict], copy_start_at: str) -> tuple[list[dict], list[dict]]:
         eligible = []

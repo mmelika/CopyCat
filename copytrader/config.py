@@ -29,6 +29,7 @@ DEFAULT_APP_STATE = {
     "resolved_target_wallet": "",
     "leader_wallet_value": "0",
     "leader_wallet_updated_at": "",
+    "bootstrap_positions_done_at": "",
 }
 
 API_TIMEOUT_SECONDS = 4

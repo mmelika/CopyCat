@@ -166,6 +166,7 @@ def topbar():
             html.Div(
                 className="topbar-controls",
                 children=[
+                    html.Button("Fresh Start", id="fresh-start-btn", className="btn-outline", n_clicks=0),
                     html.Button("Force Sync", id="force-sync-btn", className="btn-outline", n_clicks=0),
                     html.Button("Pause", id="toggle-engine-btn", className="btn-outline", n_clicks=0),
                     html.Button("Settings", id="open-settings-btn", className="btn-accent", n_clicks=0),
@@ -812,6 +813,25 @@ def toggle_engine(_):
     prevent_initial_call=True,
 )
 def force_sync(_):
+    CopyTradingEngine(DB_PATH).tick(force=True)
+    return 0
+
+
+@app.callback(
+    Output("fresh-start-btn", "n_clicks"),
+    Input("fresh-start-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def fresh_start(_):
+    settings = database.get_settings(DB_PATH)
+    copy_start_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    database.reset_runtime_state(
+        starting_balance=float(settings["paper_starting_balance"]),
+        copy_start_at=copy_start_at,
+        leader_wallet_address=(settings.get("leader_wallet_address") or "").strip(),
+        db_path=DB_PATH,
+    )
+    database.log("INFO", "reset", "Fresh start requested from dashboard.", {"copy_start_at": copy_start_at}, DB_PATH)
     CopyTradingEngine(DB_PATH).tick(force=True)
     return 0
 

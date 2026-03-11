@@ -830,6 +830,7 @@ def reset_runtime_state(
     set_app_state("last_error", "", db_path)
     set_app_state("leader_wallet_value", "0", db_path)
     set_app_state("leader_wallet_updated_at", "", db_path)
+    set_app_state("bootstrap_positions_done_at", "", db_path)
     snapshot_portfolio(starting_balance, 0.0, starting_balance, 0, db_path)
     log(
         "INFO",
