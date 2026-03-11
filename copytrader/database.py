@@ -707,6 +707,19 @@ def _find_source_price_alias_map(db_path: Path | str = DB_PATH) -> dict[str, flo
     return prices
 
 
+def _resolve_mark_price(record: dict, price_map: dict[tuple[str, str], float], alias_price_map: dict[str, float], fallback_price: float) -> float:
+    current_price = price_map.get((record.get("market_slug") or "", record.get("outcome") or ""))
+    if current_price is None or current_price <= 0:
+        for alias in _position_aliases(record):
+            aliased_price = alias_price_map.get(alias)
+            if aliased_price and aliased_price > 0:
+                current_price = aliased_price
+                break
+    if current_price is None or current_price <= 0:
+        current_price = fallback_price
+    return float(current_price or 0.0)
+
+
 def list_local_positions_marked(db_path: Path | str = DB_PATH, freeze_recent_seconds: int = 0) -> list[dict]:
     positions = get_local_positions(db_path)
     price_map = _find_source_price_map(db_path)
@@ -720,15 +733,7 @@ def list_local_positions_marked(db_path: Path | str = DB_PATH, freeze_recent_sec
         if updated_at is not None and updated_at >= freeze_cutoff:
             current_price = avg_price
         else:
-            current_price = price_map.get((row.get("market_slug") or "", row.get("outcome") or ""))
-            if current_price is None or current_price <= 0:
-                for alias in _position_aliases(row):
-                    aliased_price = alias_price_map.get(alias)
-                    if aliased_price and aliased_price > 0:
-                        current_price = aliased_price
-                        break
-            if current_price is None or current_price <= 0:
-                current_price = avg_price
+            current_price = _resolve_mark_price(row, price_map, alias_price_map, avg_price)
         market_value = round(shares * current_price, 2)
         cost_basis = round(shares * avg_price, 2)
         marked_row = dict(row)
@@ -775,6 +780,7 @@ def refresh_local_position_market_values(db_path: Path | str = DB_PATH, freeze_r
 def trade_analytics(db_path: Path | str = DB_PATH) -> dict:
     orders = list_all_copy_orders(db_path)
     price_map = _find_source_price_map(db_path)
+    alias_price_map = _find_source_price_alias_map(db_path)
     open_lots: list[dict] = []
     closed_trades: list[dict] = []
     daily_realized: dict[str, float] = {}
@@ -839,7 +845,7 @@ def trade_analytics(db_path: Path | str = DB_PATH) -> dict:
         for lot in lots:
             if lot["remaining_shares"] <= 1e-9:
                 continue
-            current_price = price_map.get((lot["market_slug"], lot["outcome"]), lot["entry_price"])
+            current_price = _resolve_mark_price(lot, price_map, alias_price_map, lot["entry_price"])
             market_value = round(lot["remaining_shares"] * current_price, 2)
             cost_basis = round(lot["remaining_shares"] * lot["entry_price"], 2)
             open_lots.append(
