@@ -15,8 +15,6 @@ from .polymarket import PolymarketClient
 
 MIN_BET_USD = 0.05
 MEANINGFUL_MIN_BET_USD = 1.00
-BASE_TRADE_PCT = 0.02
-MAX_TRADE_USD = 20.0
 MIN_CASH_RESERVE_PCT = 0.20
 
 
@@ -67,37 +65,27 @@ def _round_up_to_cent(value: float) -> float:
     return math.ceil(value * 100) / 100.0
 
 
-def _bankroll_bet_size(bankroll: float) -> float:
-    bankroll = max(float(bankroll), 0.0)
-    if bankroll <= 0:
-        return 0.0
-    sized_amount = min(bankroll * BASE_TRADE_PCT, MAX_TRADE_USD)
-    return max(_round_up_to_cent(sized_amount), MIN_BET_USD)
-
-
-def _baseline_trade_size(bankroll: float) -> float:
-    bankroll = max(float(bankroll), 0.0)
-    if bankroll <= 0:
-        return 0.0
-    return max(_round_up_to_cent(bankroll * 0.01), MEANINGFUL_MIN_BET_USD)
-
-
-def _copy_trade_size(local_equity: float, source_amount_usd: float, leader_wallet_value: float) -> float:
+def _copy_trade_size(local_equity: float, source_amount_usd: float, leader_wallet_value: float, buying_capacity: float) -> float:
     local_equity = max(float(local_equity), 0.0)
     source_amount_usd = max(float(source_amount_usd), 0.0)
     leader_wallet_value = max(float(leader_wallet_value), 0.0)
+    buying_capacity = max(float(buying_capacity), 0.0)
     if local_equity <= 0:
         return 0.0
 
-    baseline = min(_baseline_trade_size(local_equity), _bankroll_bet_size(local_equity))
-    if source_amount_usd <= 0 or leader_wallet_value <= 0:
-        return max(_bankroll_bet_size(local_equity), baseline)
+    if buying_capacity <= 0:
+        return 0.0
 
-    # Mirror the leader's aggressiveness as a fraction of their wallet,
-    # but keep a meaningful floor so small source trades do not collapse into pennies.
+    if source_amount_usd <= 0 or leader_wallet_value <= 0:
+        return buying_capacity
+
     aggression_fraction = _clamp(source_amount_usd / leader_wallet_value, 0.0, 1.0)
     scaled_amount = _round_up_to_cent(local_equity * aggression_fraction)
-    return min(max(scaled_amount, baseline), MAX_TRADE_USD)
+    if scaled_amount >= MEANINGFUL_MIN_BET_USD:
+        return min(scaled_amount, buying_capacity)
+
+    # If proportional sizing would collapse into dust, deploy available cash instead.
+    return buying_capacity
 
 
 @dataclass
@@ -533,14 +521,14 @@ class CopyTradingEngine:
         side = trade["side"]
         portfolio = database.portfolio_totals(self.db_path)
         local_equity = max(float(portfolio["net_value"]), 0.0)
-        requested_amount = _copy_trade_size(local_equity, trade.get("amount_usd") or 0.0, leader_wallet_value)
+        remaining_exposure = round(float(settings["max_total_exposure_usd"]) - portfolio["gross_exposure"], 2)
+        buying_capacity = min(float(portfolio["cash_balance"]), remaining_exposure)
+        requested_amount = _copy_trade_size(local_equity, trade.get("amount_usd") or 0.0, leader_wallet_value, buying_capacity)
 
         if side == "SELL" and not int(settings["copy_sells"]):
             return CopyDecision("skip", "Sell copying disabled.")
 
         if side == "BUY":
-            remaining_exposure = round(float(settings["max_total_exposure_usd"]) - portfolio["gross_exposure"], 2)
-            buying_capacity = min(float(portfolio["cash_balance"]), remaining_exposure)
             if buying_capacity < MIN_BET_USD:
                 return CopyDecision("skip", "No remaining buying capacity.")
             requested_amount = max(requested_amount, MIN_BET_USD)
@@ -572,10 +560,13 @@ class CopyTradingEngine:
         if remaining_exposure < MIN_BET_USD:
             return None
 
+        buying_capacity = min(float(portfolio["cash_balance"]), remaining_exposure)
+
         requested_amount = _copy_trade_size(
             max(float(portfolio["net_value"]), 0.0),
             trade.get("amount_usd") or 0.0,
             leader_wallet_value,
+            buying_capacity if buying_capacity > 0 else remaining_exposure,
         )
         requested_amount = max(requested_amount, MIN_BET_USD)
         requested_amount = min(requested_amount, remaining_exposure)

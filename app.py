@@ -346,7 +346,7 @@ app.layout = html.Div(
                         stat_card("Tracked Trader", "stat-target", "stat-target-sub"),
                         stat_card("Pending Copies", "stat-pending", "stat-pending-sub"),
                         stat_card("Copied Notional", "stat-copied-notional", "stat-copied-sub"),
-                        stat_card("Paper Portfolio", "stat-net-value", "stat-net-sub", "stat-net-chip"),
+                        stat_card("Net Liquidation Value", "stat-net-value", "stat-net-sub", "stat-net-chip"),
                     ],
                 ),
                 html.Div(
@@ -693,7 +693,7 @@ def refresh_dashboard(_, trade_tab):
         fmt_currency(portfolio["net_value"]),
         net_chip_text,
         f"stat-chip {signed_class(net_gain)}",
-        f"{fmt_signed_currency(portfolio['total_gain'])} ({portfolio['total_gain_pct']:+.2f}%) vs start",
+        f"Cash {fmt_currency(portfolio['cash_balance'])} + Marked Positions {fmt_currency(portfolio['gross_exposure'])} | {fmt_signed_currency(portfolio['total_gain'])} ({portfolio['total_gain_pct']:+.2f}%) vs start",
         str(len(source_positions)),
         render_table(["Market", "Outcome", "Shares", "Notional", "Price"], source_position_rows),
         portfolio_chart(),
