@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 import dash
 import plotly.graph_objects as go
 from flask import jsonify
-from dash import Input, Output, State, callback_context, dcc, html
+from dash import Input, Output, State, dcc, html
 
 from copytrader import database
 from copytrader.config import DB_PATH
@@ -55,10 +55,6 @@ def fmt_pacific_time(value: str) -> str:
     return dt.strftime("%m/%d %I:%M:%S %p") if dt else "-"
 
 
-def fmt_pacific_clock() -> str:
-    return datetime.now(PACIFIC_TZ).strftime("%b %d, %Y %I:%M:%S %p %Z")
-
-
 def fmt_pacific_day(value: str) -> str:
     dt = to_pacific(value)
     return dt.strftime("%Y-%m-%d") if dt else (value or "-")
@@ -78,22 +74,6 @@ def engine_runtime_status(app_state: dict, settings: dict) -> tuple[str, str, in
         return "STARTING", "status-running", None
 
     return engine_status, status_class(engine_status), stale_age_seconds
-
-
-def heartbeat_label(app_state: dict, runtime_status: str, stale_age_seconds: int | None) -> str:
-    last_sync_at = app_state.get("last_sync_at")
-    if runtime_status == "STALE":
-        return f"Heartbeat {stale_age_seconds}s old"
-    if runtime_status == "STARTING":
-        return "Waiting for heartbeat"
-    if last_sync_at:
-        parsed = parse_utc(last_sync_at)
-        if parsed is not None:
-            age_seconds = int((datetime.now(timezone.utc) - parsed).total_seconds())
-            return f"Heartbeat {age_seconds}s ago"
-    if runtime_status == "PAUSED":
-        return "Heartbeat paused"
-    return "No heartbeat"
 
 
 @server.get("/healthz")
@@ -192,132 +172,6 @@ def stats_strip():
             cell("Unrealized P/L", "stat-unrealized"),
             cell("Fill Rate", "stat-fill-rate"),
             cell("Open Positions", "stat-open-count"),
-        ],
-    )
-
-
-def overview_metric(label: str, value_id: str, sub_id: str | None = None, tone_id: str | None = None):
-    children = [
-        html.Div(label, className="overview-metric-label"),
-        html.Div(id=value_id, className="overview-metric-value"),
-    ]
-    if tone_id:
-        children.append(html.Div(id=tone_id, className="stat-chip"))
-    if sub_id:
-        children.append(html.Div(id=sub_id, className="overview-metric-sub"))
-    return html.Div(
-        className="overview-metric-card",
-        children=children,
-    )
-
-
-def overview_shell():
-    kv = lambda label, value_id: html.Div(
-        className="signal-item",
-        children=[
-            html.Div(label, className="signal-label"),
-            html.Div(id=value_id, className="signal-value"),
-        ],
-    )
-    return html.Div(
-        className="overview-grid",
-        children=[
-            html.Div(
-                className="hero-panel",
-                children=[
-                    html.Div(
-                        className="hero-header",
-                        children=[
-                            html.Div(
-                                children=[
-                                    html.Div("Portfolio NAV", className="hero-eyebrow"),
-                                    html.Div(id="hero-nav", className="hero-value"),
-                                ]
-                            ),
-                            html.Div(id="hero-return-chip", className="hero-return-chip"),
-                        ],
-                    ),
-                    html.Div(id="hero-subtitle", className="hero-subtitle"),
-                    html.Div(
-                        className="hero-metrics",
-                        children=[
-                            overview_metric("Cash Available", "hero-cash", "hero-cash-sub"),
-                            overview_metric("Gross Exposure", "hero-exposure", "hero-exposure-sub", "hero-exposure-chip"),
-                            overview_metric("Copy Fill Rate", "hero-fill-rate", "hero-fill-sub"),
-                            overview_metric("Open Positions", "hero-open-positions", "hero-open-sub"),
-                        ],
-                    ),
-                ],
-            ),
-            html.Div(
-                className="signal-panel",
-                children=[
-                    html.Div(
-                        className="signal-header",
-                        children=[
-                            html.Div("Execution Status", className="section-title"),
-                            html.Div(id="signal-runtime", className="badge"),
-                        ],
-                    ),
-                    html.Div(id="signal-summary", className="signal-summary"),
-                    html.Div(
-                        className="signal-grid",
-                        children=[
-                            kv("Lead Trader", "signal-trader"),
-                            kv("Target Wallet", "signal-wallet"),
-                            kv("Heartbeat", "signal-heartbeat"),
-                            kv("Sync Cadence", "signal-cadence"),
-                            kv("Leader NAV", "signal-leader-nav"),
-                            kv("Pending Queue", "signal-pending"),
-                        ],
-                    ),
-                ],
-            ),
-        ],
-    )
-
-
-def pulse_card(title: str, value_id: str, sub_id: str | None = None, tone_id: str | None = None):
-    children = [html.Div(title, className="pulse-label"), html.Div(id=value_id, className="pulse-value")]
-    if tone_id:
-        children.append(html.Div(id=tone_id, className="stat-chip"))
-    if sub_id:
-        children.append(html.Div(id=sub_id, className="pulse-sub"))
-    return html.Div(className="pulse-card", children=children)
-
-
-def section(title: str, body_id: str, badge_id: str | None = None, graph: bool = False):
-    header_children = [html.Span(title, className="section-title")]
-    if badge_id:
-        header_children.append(html.Span(id=badge_id, className="badge"))
-    body = dcc.Graph(id=body_id, config={"displayModeBar": False}, className="chart") if graph else html.Div(id=body_id)
-    return html.Div(
-        className="section-card",
-        children=[html.Div(className="section-header", children=header_children), body],
-    )
-
-
-def trade_views():
-    return html.Div(
-        className="section-card",
-        children=[
-            html.Div(
-                className="section-header",
-                children=[
-                    html.Span("Trade Book", className="section-title"),
-                    html.Span(id="trade-book-badge", className="badge"),
-                ],
-            ),
-            dcc.Tabs(
-                id="trade-tabs",
-                value="open-trades",
-                className="trade-tabs",
-                children=[
-                    dcc.Tab(label="Open Trades", value="open-trades", className="trade-tab", selected_className="trade-tab-selected"),
-                    dcc.Tab(label="Closed Trades", value="closed-trades", className="trade-tab", selected_className="trade-tab-selected"),
-                ],
-            ),
-            html.Div(id="trade-book-table", className="trade-book-table"),
         ],
     )
 
@@ -499,78 +353,6 @@ def settings_tab_content():
                     ),
                 ],
             ),
-        ],
-    )
-
-
-def settings_modal():
-    field = lambda label, field_id, placeholder, value=None: html.Div(
-        className="settings-field",
-        children=[
-            html.Div(label, className="settings-label"),
-            dcc.Input(id=field_id, className="settings-input", value=value, placeholder=placeholder, debounce=False),
-        ],
-    )
-    return html.Div(
-        id="settings-modal",
-        className="modal-overlay hidden",
-        children=[
-            html.Div(
-                className="modal-box",
-                children=[
-                    html.Div(
-                        className="modal-header",
-                        children=[
-                            html.Div("Copier Settings", className="modal-title"),
-                            html.Button("Close", id="close-settings-btn", className="btn-ghost", n_clicks=0),
-                        ],
-                    ),
-                    html.Div(
-                        className="modal-body",
-                        children=[
-                            html.Div("Target", className="modal-section-label"),
-                            html.Div(
-                                className="modal-row modal-row-3",
-                                children=[
-                                    field("Target Handle", "settings-target-handle", "@GamblingIsAllYouNeed"),
-                                    field("Target Wallet (optional)", "settings-target-wallet", "0x..."),
-                                    field("Reference Wallet", "settings-leader-wallet", "0xBEbe..."),
-                                ],
-                            ),
-                            html.Div("Execution", className="modal-section-label"),
-                            html.Div(
-                                className="modal-row modal-row-2",
-                                children=[
-                                    field("Paper Starting Balance", "settings-start-balance", "5000"),
-                                    field("Paper Cash Balance", "settings-cash-balance", "5000"),
-                                ],
-                            ),
-                            html.Div(
-                                className="modal-row modal-row-2",
-                                children=[
-                                    field("Max Total Exposure USD", "settings-max-exposure", "2500"),
-                                    field("Slippage Bps", "settings-slippage-bps", "30"),
-                                ],
-                            ),
-                            html.Div("Sync", className="modal-section-label"),
-                            html.Div(
-                                className="modal-row modal-row-3",
-                                children=[
-                                    field("Sync Interval ms", "settings-sync-interval", "1200"),
-                                    field("Trade Fetch Limit", "settings-trade-limit", "100"),
-                                    field("Copy Sells (1/0)", "settings-copy-sells", "1"),
-                                ],
-                            ),
-                        ],
-                    ),
-                    html.Div(
-                        className="modal-footer",
-                        children=[
-                            html.Button("Save Settings", id="save-settings-btn", className="btn-accent", n_clicks=0),
-                        ],
-                    ),
-                ],
-            )
         ],
     )
 
