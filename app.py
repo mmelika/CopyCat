@@ -57,6 +57,20 @@ def engine_runtime_status(app_state: dict, settings: dict) -> tuple[str, str, in
     return engine_status, status_class(engine_status), stale_age_seconds
 
 
+def heartbeat_label(app_state: dict, runtime_status: str, stale_age_seconds: int | None) -> str:
+    last_sync_at = app_state.get("last_sync_at")
+    if runtime_status == "STALE":
+        return f"Heartbeat {stale_age_seconds}s old"
+    if runtime_status == "STARTING":
+        return "Waiting for heartbeat"
+    if last_sync_at:
+        age_seconds = int((datetime.now(timezone.utc) - parse_utc(last_sync_at)).total_seconds())
+        return f"Heartbeat {age_seconds}s ago"
+    if runtime_status == "PAUSED":
+        return "Heartbeat paused"
+    return "No heartbeat"
+
+
 @server.get("/healthz")
 def healthz():
     settings = database.get_settings(DB_PATH)
@@ -562,11 +576,9 @@ def refresh_dashboard(_, trade_tab):
     )
 
     refresh_text = f"Last sync: {app_state['last_sync_at'][11:19] if app_state['last_sync_at'] else 'never'}"
-    if runtime_status == "STALE":
-        refresh_text = f"Heartbeat stale: {stale_age_seconds}s"
 
     return (
-        runtime_status,
+        heartbeat_label(app_state, runtime_status, stale_age_seconds),
         runtime_class,
         "Pause" if app_state["engine_status"] == "RUNNING" else "Resume",
         refresh_text,
