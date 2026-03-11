@@ -477,6 +477,125 @@ tbody td {
   height: 300px;
 }
 
+.portfolio-card {
+  position: relative;
+  margin-bottom: 16px;
+  padding: 24px 24px 12px;
+  border-radius: 28px;
+  overflow: hidden;
+  border: 1px solid rgba(154, 188, 220, 0.16);
+  background:
+    radial-gradient(circle at 18% 18%, rgba(157, 82, 255, 0.12), transparent 30%),
+    radial-gradient(circle at 74% 12%, rgba(31, 162, 255, 0.16), transparent 26%),
+    linear-gradient(180deg, rgba(13, 24, 37, 0.96), rgba(8, 15, 24, 0.94));
+  box-shadow: var(--shadow);
+}
+
+.portfolio-card::after {
+  content: '';
+  position: absolute;
+  inset: auto -10% -34% auto;
+  width: 360px;
+  height: 360px;
+  background: radial-gradient(circle, rgba(31, 162, 255, 0.16), transparent 62%);
+  pointer-events: none;
+}
+
+.portfolio-card-top {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 24px;
+}
+
+.portfolio-card-copy {
+  display: grid;
+  gap: 10px;
+}
+
+.portfolio-chart-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.portfolio-chart-label::before {
+  content: '';
+  width: 11px;
+  height: 11px;
+  border-radius: 999px 999px 3px 999px;
+  background: linear-gradient(180deg, #31d387, #20a86a);
+  transform: rotate(45deg);
+  box-shadow: 0 0 0 5px rgba(38, 194, 129, 0.08);
+}
+
+.portfolio-chart-amount {
+  font-size: clamp(46px, 6vw, 64px);
+  line-height: 0.95;
+  font-weight: 800;
+  letter-spacing: -0.06em;
+  font-variant-numeric: tabular-nums;
+}
+
+.portfolio-chart-subtitle {
+  color: var(--muted);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.portfolio-range-group {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.portfolio-range-btn {
+  min-width: 78px;
+  padding: 14px 18px;
+  border-radius: 20px;
+  border: 1px solid transparent;
+  color: #94a5b8;
+  background: transparent;
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  cursor: pointer;
+  transition: 140ms ease;
+}
+
+.portfolio-range-btn:hover {
+  color: #dde9f6;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.portfolio-range-btn-active {
+  color: #f2f8ff;
+  border-color: rgba(57, 167, 255, 0.24);
+  background: linear-gradient(180deg, rgba(57, 167, 255, 0.24), rgba(57, 167, 255, 0.10));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.portfolio-graph {
+  position: relative;
+  z-index: 1;
+  height: 220px;
+  margin-top: 8px;
+}
+
+.portfolio-graph .js-plotly-plot,
+.portfolio-graph .plot-container,
+.portfolio-graph .svg-container {
+  height: 100% !important;
+}
+
 .analysis-stack {
   display: grid;
   gap: 12px;
@@ -586,6 +705,14 @@ tbody td {
     min-width: 0;
     text-align: left;
   }
+
+  .portfolio-card-top {
+    flex-direction: column;
+  }
+
+  .portfolio-range-group {
+    width: 100%;
+  }
 }
 
 @media (max-width: 760px) {
@@ -611,5 +738,20 @@ tbody td {
   .stat-value-row {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .portfolio-card {
+    padding: 20px 18px 10px;
+    border-radius: 22px;
+  }
+
+  .portfolio-range-btn {
+    min-width: 0;
+    flex: 1 1 0;
+    padding: 12px 14px;
+  }
+
+  .portfolio-graph {
+    height: 190px;
   }
 }

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import os
 from zoneinfo import ZoneInfo
 
@@ -331,6 +331,38 @@ def settings_modal():
     )
 
 
+def portfolio_curve_card():
+    return html.Div(
+        className="portfolio-card",
+        children=[
+            dcc.Store(id="portfolio-range-store", data="1D"),
+            html.Div(
+                className="portfolio-card-top",
+                children=[
+                    html.Div(
+                        className="portfolio-card-copy",
+                        children=[
+                            html.Div("Profit/Loss", className="portfolio-chart-label"),
+                            html.Div(id="portfolio-chart-amount", className="portfolio-chart-amount"),
+                            html.Div(id="portfolio-chart-subtitle", className="portfolio-chart-subtitle"),
+                        ],
+                    ),
+                    html.Div(
+                        className="portfolio-range-group",
+                        children=[
+                            html.Button("1D", id="portfolio-range-1d", className="portfolio-range-btn", n_clicks=0),
+                            html.Button("1W", id="portfolio-range-1w", className="portfolio-range-btn", n_clicks=0),
+                            html.Button("1M", id="portfolio-range-1m", className="portfolio-range-btn", n_clicks=0),
+                            html.Button("ALL", id="portfolio-range-all", className="portfolio-range-btn", n_clicks=0),
+                        ],
+                    ),
+                ],
+            ),
+            dcc.Graph(id="portfolio-chart", config={"displayModeBar": False, "scrollZoom": False}, className="portfolio-graph"),
+        ],
+    )
+
+
 app.layout = html.Div(
     [
         dcc.Interval(id="refresh-interval", interval=5000, n_intervals=0),
@@ -356,7 +388,7 @@ app.layout = html.Div(
                             className="dashboard-col",
                             children=[
                                 section("Source Positions", "source-positions-table", "source-positions-badge"),
-                                section("Paper Portfolio Curve", "portfolio-chart", graph=True),
+                                portfolio_curve_card(),
                                 section("Daily Performance", "daily-performance-table", "daily-performance-badge"),
                                 section("Sync History", "sync-history-table", "sync-history-badge"),
                             ],
@@ -394,65 +426,154 @@ def render_table(headers, rows):
     )
 
 
-def portfolio_chart():
-    snapshots = database.list_portfolio_snapshots(DB_PATH, limit=80)
+def portfolio_chart(range_key: str):
+    snapshots = database.list_portfolio_snapshots(DB_PATH, limit=720)
     if not snapshots:
-        snapshots = [{"ts": "-", "net_value": 0.0}]
+        snapshots = [{"ts": datetime.now(timezone.utc).isoformat(), "net_value": 0.0}]
+
+    end_time = parse_utc(snapshots[-1]["ts"]) or datetime.now(timezone.utc)
+    range_windows = {
+        "1D": timedelta(days=1),
+        "1W": timedelta(weeks=1),
+        "1M": timedelta(days=30),
+    }
+    if range_key in range_windows:
+        start_time = end_time - range_windows[range_key]
+        filtered = [row for row in snapshots if (parse_utc(row["ts"]) or end_time) >= start_time]
+        if filtered:
+            snapshots = filtered
+
     baseline = float(snapshots[0]["net_value"] or 0.0)
-    x_values = [fmt_pacific_time(row["ts"]) for row in snapshots]
-    y_values = [row["net_value"] for row in snapshots]
-    colors = ["#22c55e" if value >= baseline else "#ef4444" for value in y_values]
+    current_value = float(snapshots[-1]["net_value"] or 0.0)
+    change_value = current_value - baseline
+    positive = change_value >= 0
+    line_color = "#1fa2ff" if positive else "#ff7d7d"
+    fill_color = "rgba(31,162,255,0.18)" if positive else "rgba(255,125,125,0.14)"
+    x_values = [to_pacific(row["ts"]).strftime("%b %d %I:%M %p") if to_pacific(row["ts"]) else row["ts"] for row in snapshots]
+    y_values = [float(row["net_value"] or 0.0) for row in snapshots]
+
     figure = go.Figure()
     figure.add_trace(
         go.Scatter(
             x=x_values,
             y=y_values,
             mode="lines",
-            line={"color": "#22c55e" if y_values[-1] >= baseline else "#ef4444", "width": 3},
+            line={"color": line_color, "width": 4, "shape": "spline", "smoothing": 1.05},
             fill="tozeroy",
-            fillcolor="rgba(34,197,94,0.12)" if y_values[-1] >= baseline else "rgba(239,68,68,0.12)",
-            hovertemplate="%{y:$,.2f}<extra></extra>",
-        )
-    )
-    figure.add_trace(
-        go.Scatter(
-            x=x_values,
-            y=[baseline for _ in y_values],
-            mode="lines",
-            line={"color": "rgba(255,255,255,0.18)", "width": 1, "dash": "dot"},
-            hoverinfo="skip",
-            showlegend=False,
-        )
-    )
-    figure.add_trace(
-        go.Scatter(
-            x=x_values,
-            y=y_values,
-            mode="markers",
-            marker={"color": colors, "size": 6, "line": {"width": 0}},
-            hovertemplate="%{y:$,.2f}<extra></extra>",
+            fillcolor=fill_color,
+            hovertemplate="%{x}<br>%{y:$,.2f}<extra></extra>",
             showlegend=False,
         )
     )
     figure.update_layout(
-        paper_bgcolor="#111114",
-        plot_bgcolor="#111114",
-        margin={"l": 18, "r": 18, "t": 8, "b": 24},
-        font={"color": "#a1a1aa", "family": "Space Grotesk"},
-        xaxis={"showgrid": False, "zeroline": False, "showline": False, "tickfont": {"size": 10}},
-        yaxis={"gridcolor": "rgba(255,255,255,0.06)", "zeroline": False, "tickprefix": "$"},
-    )
-    figure.add_annotation(
-        x=x_values[-1],
-        y=y_values[-1],
-        text=fmt_signed_currency(y_values[-1] - baseline),
-        showarrow=False,
-        xanchor="left",
-        yanchor="bottom",
-        font={"color": "#22c55e" if y_values[-1] >= baseline else "#ef4444", "size": 12},
-        bgcolor="#111114",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        margin={"l": 0, "r": 0, "t": 12, "b": 0},
+        font={"color": "#98a8bb", "family": "Manrope"},
+        hovermode="x unified",
+        hoverlabel={"bgcolor": "#0d1825", "bordercolor": "rgba(57,167,255,0.18)", "font": {"color": "#edf4fb"}},
+        xaxis={
+            "showgrid": False,
+            "zeroline": False,
+            "showline": False,
+            "showticklabels": False,
+            "fixedrange": True,
+        },
+        yaxis={
+            "showgrid": False,
+            "zeroline": False,
+            "showline": False,
+            "showticklabels": False,
+            "fixedrange": True,
+        },
     )
     return figure
+
+
+def portfolio_range_meta(range_key: str) -> tuple[str, str]:
+    labels = {
+        "1D": "Past Day",
+        "1W": "Past Week",
+        "1M": "Past Month",
+        "ALL": "All Time",
+    }
+    button_map = {
+        "1D": "portfolio-range-btn portfolio-range-btn-active",
+        "1W": "portfolio-range-btn portfolio-range-btn-active",
+        "1M": "portfolio-range-btn portfolio-range-btn-active",
+        "ALL": "portfolio-range-btn portfolio-range-btn-active",
+    }
+    return labels.get(range_key, "Past Day"), button_map.get(range_key, "portfolio-range-btn portfolio-range-btn-active")
+
+
+@app.callback(
+    Output("portfolio-range-store", "data"),
+    Input("portfolio-range-1d", "n_clicks"),
+    Input("portfolio-range-1w", "n_clicks"),
+    Input("portfolio-range-1m", "n_clicks"),
+    Input("portfolio-range-all", "n_clicks"),
+    State("portfolio-range-store", "data"),
+    prevent_initial_call=True,
+)
+def set_portfolio_range(_, __, ___, ____, current_range):
+    triggered = callback_context.triggered_id
+    mapping = {
+        "portfolio-range-1d": "1D",
+        "portfolio-range-1w": "1W",
+        "portfolio-range-1m": "1M",
+        "portfolio-range-all": "ALL",
+    }
+    return mapping.get(triggered, current_range)
+
+
+@app.callback(
+    Output("portfolio-chart", "figure"),
+    Output("portfolio-chart-amount", "children"),
+    Output("portfolio-chart-subtitle", "children"),
+    Output("portfolio-range-1d", "className"),
+    Output("portfolio-range-1w", "className"),
+    Output("portfolio-range-1m", "className"),
+    Output("portfolio-range-all", "className"),
+    Input("refresh-interval", "n_intervals"),
+    Input("portfolio-range-store", "data"),
+)
+def refresh_portfolio_chart(_, range_key):
+    selected_range = range_key or "1D"
+    snapshots = database.list_portfolio_snapshots(DB_PATH, limit=720)
+    if not snapshots:
+        amount_text = fmt_signed_currency(0.0)
+    else:
+        end_time = parse_utc(snapshots[-1]["ts"]) or datetime.now(timezone.utc)
+        range_windows = {
+            "1D": timedelta(days=1),
+            "1W": timedelta(weeks=1),
+            "1M": timedelta(days=30),
+        }
+        filtered = snapshots
+        if selected_range in range_windows:
+            start_time = end_time - range_windows[selected_range]
+            scoped = [row for row in snapshots if (parse_utc(row["ts"]) or end_time) >= start_time]
+            if scoped:
+                filtered = scoped
+        baseline = float(filtered[0]["net_value"] or 0.0)
+        current_value = float(filtered[-1]["net_value"] or 0.0)
+        amount_text = fmt_signed_currency(current_value - baseline)
+
+    subtitle_map = {
+        "1D": "Past Day",
+        "1W": "Past Week",
+        "1M": "Past Month",
+        "ALL": "All Time",
+    }
+    button_classes = []
+    for key in ("1D", "1W", "1M", "ALL"):
+        button_classes.append("portfolio-range-btn portfolio-range-btn-active" if key == selected_range else "portfolio-range-btn")
+    return (
+        portfolio_chart(selected_range),
+        amount_text,
+        subtitle_map.get(selected_range, "Past Day"),
+        *button_classes,
+    )
 
 
 @app.callback(
@@ -479,7 +600,6 @@ def portfolio_chart():
     Output("stat-net-sub", "children"),
     Output("source-positions-badge", "children"),
     Output("source-positions-table", "children"),
-    Output("portfolio-chart", "figure"),
     Output("daily-performance-badge", "children"),
     Output("daily-performance-table", "children"),
     Output("sync-history-badge", "children"),
@@ -635,8 +755,8 @@ def refresh_dashboard(_, trade_tab):
                     html.Div("Fast Copy Model", className="analysis-label"),
                     html.Div(
                         f"Polling every {settings['sync_interval_ms']}ms with {settings['trade_fetch_limit']} trade lookback. "
-                        "Paper execution sizes each copied trade at 10% of bankroll below $100, then 5% at $100+, "
-                        "with a hard cap of $20 per bet. The dashboard refreshes separately and never gates copy execution.",
+                        "Paper execution sizes buys from available cash, caps each new bet at 20% of current cash, "
+                        "and refreshes dashboard marks independently every 5 seconds.",
                         className="analysis-text",
                     ),
                 ],
@@ -696,7 +816,6 @@ def refresh_dashboard(_, trade_tab):
         f"Cash {fmt_currency(portfolio['cash_balance'])} + Marked Positions {fmt_currency(portfolio['gross_exposure'])} | {fmt_signed_currency(portfolio['total_gain'])} ({portfolio['total_gain_pct']:+.2f}%) vs start",
         str(len(source_positions)),
         render_table(["Market", "Outcome", "Shares", "Notional", "Price"], source_position_rows),
-        portfolio_chart(),
         str(len(daily_performance)),
         render_table(["Date", "Day Change", "Closed P/L", "Portfolio"], daily_rows),
         str(len(sync_runs)),
