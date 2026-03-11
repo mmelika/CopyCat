@@ -16,7 +16,7 @@ from .polymarket import PolymarketClient
 MIN_BET_USD = 0.05
 MEANINGFUL_MIN_BET_USD = 1.00
 MIN_CASH_RESERVE_PCT = 0.20
-MAX_SINGLE_BET_BANKROLL_PCT = 0.20
+MAX_SINGLE_BET_CASH_PCT = 0.20
 MAX_TRADE_FETCH_LIMIT = 10
 
 
@@ -67,18 +67,19 @@ def _round_up_to_cent(value: float) -> float:
     return math.ceil(value * 100) / 100.0
 
 
-def _copy_trade_size(local_equity: float, source_amount_usd: float, leader_wallet_value: float, buying_capacity: float) -> float:
+def _copy_trade_size(local_equity: float, source_amount_usd: float, leader_wallet_value: float, buying_capacity: float, cash_balance: float) -> float:
     local_equity = max(float(local_equity), 0.0)
     source_amount_usd = max(float(source_amount_usd), 0.0)
     leader_wallet_value = max(float(leader_wallet_value), 0.0)
     buying_capacity = max(float(buying_capacity), 0.0)
+    cash_balance = max(float(cash_balance), 0.0)
     if local_equity <= 0:
         return 0.0
 
     if buying_capacity <= 0:
         return 0.0
 
-    single_bet_cap = _round_up_to_cent(local_equity * MAX_SINGLE_BET_BANKROLL_PCT)
+    single_bet_cap = _round_up_to_cent(cash_balance * MAX_SINGLE_BET_CASH_PCT)
     effective_capacity = min(buying_capacity, single_bet_cap)
     if effective_capacity <= 0:
         return 0.0
@@ -529,9 +530,10 @@ class CopyTradingEngine:
         side = trade["side"]
         portfolio = database.portfolio_totals(self.db_path)
         local_equity = max(float(portfolio["net_value"]), 0.0)
+        cash_balance = float(portfolio["cash_balance"])
         remaining_exposure = round(float(settings["max_total_exposure_usd"]) - portfolio["gross_exposure"], 2)
         buying_capacity = min(float(portfolio["cash_balance"]), remaining_exposure)
-        requested_amount = _copy_trade_size(local_equity, trade.get("amount_usd") or 0.0, leader_wallet_value, buying_capacity)
+        requested_amount = _copy_trade_size(local_equity, trade.get("amount_usd") or 0.0, leader_wallet_value, buying_capacity, cash_balance)
 
         if side == "SELL" and not int(settings["copy_sells"]):
             return CopyDecision("skip", "Sell copying disabled.")
@@ -575,6 +577,7 @@ class CopyTradingEngine:
             trade.get("amount_usd") or 0.0,
             leader_wallet_value,
             buying_capacity if buying_capacity > 0 else remaining_exposure,
+            float(portfolio["cash_balance"]),
         )
         requested_amount = max(requested_amount, MIN_BET_USD)
         requested_amount = min(requested_amount, remaining_exposure)

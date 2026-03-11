@@ -345,7 +345,7 @@ app.layout = html.Div(
                     children=[
                         stat_card("Tracked Trader", "stat-target", "stat-target-sub"),
                         stat_card("Pending Copies", "stat-pending", "stat-pending-sub"),
-                        stat_card("Copied Notional", "stat-copied-notional", "stat-copied-sub"),
+                        stat_card("Active Positions Value", "stat-copied-notional", "stat-copied-sub"),
                         stat_card("Net Liquidation Value", "stat-net-value", "stat-net-sub", "stat-net-chip"),
                     ],
                 ),
@@ -511,7 +511,7 @@ def refresh_dashboard(_, trade_tab):
     daily_performance = database.daily_portfolio_performance(DB_PATH)[:12]
     daily_realized_map = {row["date"]: row["realized_pnl"] for row in analytics["daily_realized"]}
 
-    copied_notional = sum(row["requested_amount_usd"] for row in copy_orders if row["status"] == "FILLED")
+    active_positions_value = float(portfolio["gross_exposure"])
     source_position_rows = [
         [
             short_text(row["market_title"], 36),
@@ -688,8 +688,8 @@ def refresh_dashboard(_, trade_tab):
         target_wallet,
         str(len(pending)),
         f"{len(copy_orders)} total copied orders",
-        fmt_currency(copied_notional),
-        f"Cash {fmt_currency(portfolio['cash_balance'])} / Exposure {fmt_currency(portfolio['gross_exposure'])}",
+        fmt_currency(active_positions_value),
+        f"{portfolio['positions_count']} active positions | updated every 5s",
         fmt_currency(portfolio["net_value"]),
         net_chip_text,
         f"stat-chip {signed_class(net_gain)}",
@@ -831,6 +831,8 @@ def fresh_start(_):
         leader_wallet_address=(settings.get("leader_wallet_address") or "").strip(),
         db_path=DB_PATH,
     )
+    # A fresh start should only copy trades that happen after this timestamp.
+    database.set_app_state("bootstrap_positions_done_at", copy_start_at, DB_PATH)
     database.log("INFO", "reset", "Fresh start requested from dashboard.", {"copy_start_at": copy_start_at}, DB_PATH)
     CopyTradingEngine(DB_PATH).tick(force=True)
     return 0
