@@ -28,6 +28,11 @@ jobs:
             . .venv/bin/activate
             pip install --upgrade pip
             pip install -r requirements.txt
-            sudo systemctl restart copycat copycat-engine
+            sudo systemctl stop copycat copycat-engine || true
+            pkill -9 -f gunicorn || true
+            sleep 2
+            sudo systemctl start copycat copycat-engine
+            sleep 2
             sudo systemctl is-active --quiet copycat
             sudo systemctl is-active --quiet copycat-engine
+            curl -fsS http://127.0.0.1:8060/healthz > /tmp/copycat-health.json
