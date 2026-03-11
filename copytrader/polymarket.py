@@ -18,6 +18,12 @@ def _to_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _clean_id(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+    return str(value).strip()
+
+
 def _wallet_like(value: str) -> bool:
     return isinstance(value, str) and value.startswith("0x") and len(value) >= 10
 
@@ -187,6 +193,8 @@ class PolymarketClient:
                     "amount_usd": amount_usd,
                     "created_at": _iso(item.get("createdAt") or item.get("timestamp") or item.get("time")),
                     "status": item.get("status") or "CONFIRMED",
+                    "condition_id": _clean_id(item.get("conditionId") or item.get("condition_id") or item.get("marketId")),
+                    "token_id": _clean_id(item.get("asset") or item.get("tokenId") or item.get("token_id") or item.get("outcomeTokenId")),
                 }
             )
         trades.sort(key=lambda item: item["created_at"])
@@ -223,6 +231,8 @@ class PolymarketClient:
                         round(shares * price, 4),
                     ),
                     "updated_at": _iso(item.get("updatedAt") or item.get("timestamp")),
+                    "condition_id": _clean_id(item.get("conditionId") or item.get("condition_id") or item.get("marketId")),
+                    "token_id": _clean_id(item.get("asset") or item.get("tokenId") or item.get("token_id") or item.get("outcomeTokenId")),
                 }
             )
         return positions

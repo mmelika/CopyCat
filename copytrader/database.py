@@ -323,6 +323,17 @@ def upsert_source_positions(positions: list[dict], db_path: Path | str = DB_PATH
             )
 
 
+def replace_source_positions(positions: list[dict], db_path: Path | str = DB_PATH) -> None:
+    current_keys = {position["position_key"] for position in positions if position.get("position_key")}
+    with connect(db_path) as conn:
+        if current_keys:
+            placeholders = ",".join("?" for _ in current_keys)
+            conn.execute(f"DELETE FROM source_positions WHERE position_key NOT IN ({placeholders})", tuple(current_keys))
+        else:
+            conn.execute("DELETE FROM source_positions")
+    upsert_source_positions(positions, db_path)
+
+
 def list_source_positions(limit: int = 100, db_path: Path | str = DB_PATH) -> list[dict]:
     with connect(db_path) as conn:
         rows = conn.execute(
@@ -464,6 +475,34 @@ def list_copy_orders(limit: int = 100, db_path: Path | str = DB_PATH) -> list[di
     return [dict(row) for row in rows]
 
 
+def list_sell_match_audit(limit: int = 20, db_path: Path | str = DB_PATH) -> list[dict]:
+    rows = list_copy_orders(limit * 4, db_path)
+    audit_rows = []
+    for row in rows:
+        if row.get("side") != "SELL":
+            continue
+        payload = {}
+        try:
+            payload = json.loads(row.get("raw_json") or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            payload = {}
+        audit_rows.append(
+            {
+                "created_at": row.get("created_at"),
+                "market_title": row.get("market_title"),
+                "outcome": row.get("outcome"),
+                "requested_amount_usd": row.get("requested_amount_usd"),
+                "executed_price": row.get("executed_price"),
+                "position_key": payload.get("position_key") or "",
+                "match_strategy": payload.get("match_strategy") or ("manual" if not row.get("source_trade_id") else "unlabeled"),
+                "source_trade_id": row.get("source_trade_id") or "",
+            }
+        )
+        if len(audit_rows) >= limit:
+            break
+    return audit_rows
+
+
 def list_all_copy_orders(db_path: Path | str = DB_PATH) -> list[dict]:
     with connect(db_path) as conn:
         rows = conn.execute(
@@ -562,8 +601,8 @@ def list_portfolio_snapshots(db_path: Path | str = DB_PATH, limit: int = 120) ->
 
 def portfolio_totals(db_path: Path | str = DB_PATH) -> dict:
     settings = get_settings(db_path)
-    positions = get_local_positions(db_path)
-    gross_exposure = round(sum(row["notional_usd"] for row in positions), 2)
+    positions = list_local_positions_marked(db_path)
+    gross_exposure = round(sum(row["market_value"] for row in positions), 2)
     cash_balance = float(settings["paper_cash_balance"])
     realized_pnl = round(sum(row["realized_pnl"] for row in positions), 2)
     net_value = round(cash_balance + gross_exposure, 2)
@@ -591,6 +630,59 @@ def _find_source_price_map(db_path: Path | str = DB_PATH) -> dict[tuple[str, str
         except (TypeError, ValueError):
             prices[key] = 0.0
     return prices
+
+
+def list_local_positions_marked(db_path: Path | str = DB_PATH) -> list[dict]:
+    positions = get_local_positions(db_path)
+    price_map = _find_source_price_map(db_path)
+    marked = []
+    for row in positions:
+        current_price = price_map.get((row.get("market_slug") or "", row.get("outcome") or ""))
+        if current_price is None or current_price <= 0:
+            current_price = float(row.get("avg_price") or 0.0)
+        shares = float(row.get("shares") or 0.0)
+        avg_price = float(row.get("avg_price") or 0.0)
+        market_value = round(shares * current_price, 2)
+        cost_basis = round(shares * avg_price, 2)
+        marked_row = dict(row)
+        marked_row.update(
+            {
+                "current_price": round(current_price, 4),
+                "market_value": market_value,
+                "cost_basis": cost_basis,
+                "unrealized_pnl": round(market_value - cost_basis, 2),
+            }
+        )
+        marked.append(marked_row)
+    marked.sort(key=lambda row: (row["market_value"], row["updated_at"]), reverse=True)
+    return marked
+
+
+def refresh_local_position_market_values(db_path: Path | str = DB_PATH) -> int:
+    positions = list_local_positions_marked(db_path)
+    updated = 0
+    for row in positions:
+        market_value = round(float(row.get("market_value") or 0.0), 2)
+        previous_value = round(float(row.get("notional_usd") or 0.0), 2)
+        if abs(market_value - previous_value) < 0.01:
+            continue
+        update_local_position(
+            row["position_key"],
+            {
+                "market_slug": row.get("market_slug"),
+                "market_title": row.get("market_title"),
+                "outcome": row.get("outcome"),
+                "side": row.get("side"),
+                "shares": row.get("shares"),
+                "avg_price": row.get("avg_price"),
+                "notional_usd": market_value,
+                "realized_pnl": row.get("realized_pnl", 0.0),
+                "updated_at": utc_now(),
+            },
+            db_path,
+        )
+        updated += 1
+    return updated
 
 
 def trade_analytics(db_path: Path | str = DB_PATH) -> dict:

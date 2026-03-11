@@ -364,6 +364,7 @@ app.layout = html.Div(
                             className="dashboard-col",
                             children=[
                                 section("Copied Trades", "copied-trades-table", "copied-trades-badge"),
+                                section("Sell Match Audit", "sell-match-table", "sell-match-badge"),
                                 trade_views(),
                                 section("Live Analysis", "analysis-panel"),
                                 section("Engine Log", "engine-log-table", "engine-log-badge"),
@@ -484,6 +485,8 @@ def portfolio_chart():
     Output("sync-history-table", "children"),
     Output("copied-trades-badge", "children"),
     Output("copied-trades-table", "children"),
+    Output("sell-match-badge", "children"),
+    Output("sell-match-table", "children"),
     Output("trade-book-badge", "children"),
     Output("trade-book-table", "children"),
     Output("analysis-panel", "children"),
@@ -498,6 +501,7 @@ def refresh_dashboard(_, trade_tab):
     runtime_status, runtime_class, stale_age_seconds = engine_runtime_status(app_state, settings)
     source_positions = database.list_source_positions(10, DB_PATH)
     copy_orders = database.list_copy_orders(12, DB_PATH)
+    sell_match_rows = database.list_sell_match_audit(12, DB_PATH)
     pending = database.list_pending_source_trades(DB_PATH)
     sync_runs = database.list_sync_runs(12, DB_PATH)
     logs = database.list_logs(14, DB_PATH)
@@ -529,6 +533,17 @@ def refresh_dashboard(_, trade_tab):
         ]
         for row in copy_orders
     ] or [["No copied trades yet", "-", "-", "-", "-", "-", "-"]]
+    sell_audit_rows = [
+        [
+            fmt_pacific_time(row["created_at"]),
+            short_text(row["market_title"], 22),
+            row["outcome"],
+            row["match_strategy"],
+            short_text(row["position_key"], 30) or "-",
+            short_text(row["source_trade_id"], 26) or "-",
+        ]
+        for row in sell_match_rows
+    ] or [["No sell matches yet", "-", "-", "-", "-", "-"]]
     daily_rows = [
         [
             row["date"],
@@ -687,6 +702,8 @@ def refresh_dashboard(_, trade_tab):
         render_table(["Time (PT)", "Status", "Seen", "New", "Copied", "Latency"], sync_rows),
         str(len(copy_orders)),
         render_table(["Completed At (PT)", "Market", "Outcome", "Side", "USD", "Px", "Status"], copied_trade_rows),
+        str(len(sell_match_rows)),
+        render_table(["Sold At (PT)", "Market", "Outcome", "Match", "Local Position", "Source Trade"], sell_audit_rows),
         str(trade_book_count),
         trade_book_table,
         analysis,
