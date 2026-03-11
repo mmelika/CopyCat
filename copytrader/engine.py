@@ -541,6 +541,9 @@ class CopyTradingEngine:
         if side == "BUY":
             if buying_capacity < MIN_BET_USD:
                 return CopyDecision("skip", "No remaining buying capacity.")
+            duplicate_reason = self._same_price_buy_guard(trade, settings)
+            if duplicate_reason:
+                return CopyDecision("skip", duplicate_reason)
             requested_amount = max(requested_amount, MIN_BET_USD)
             requested_amount = min(requested_amount, buying_capacity)
             requested_amount = _round_up_to_cent(requested_amount) if requested_amount > 0 else 0.0
@@ -818,6 +821,19 @@ class CopyTradingEngine:
 
     def _find_matching_local_position(self, trade: dict) -> tuple[dict | None, str]:
         return self._find_matching_position_in_records(trade, database.get_local_positions(self.db_path))
+
+    def _same_price_buy_guard(self, trade: dict, settings: dict) -> str | None:
+        position_key = f"{trade['market_slug']}:{trade['outcome']}"
+        latest_order = database.get_latest_copy_order_for_position(position_key, self.db_path)
+        if not latest_order or latest_order.get("side") != "BUY":
+            return None
+        source_price = max(float(trade.get("price") or 0.0), 0.01)
+        slippage = float(settings["slippage_bps"]) / 10000.0
+        executed_price = round(_clamp(source_price * (1 + slippage), 0.01, 0.99), 4)
+        latest_price = round(float(latest_order.get("executed_price") or 0.0), 4)
+        if abs(executed_price - latest_price) < 0.0001:
+            return "Already bought this outcome at the current price."
+        return None
 
     def _find_matching_position_in_records(self, trade: dict, records: list[dict]) -> tuple[dict | None, str]:
         alias_index = self._build_alias_index(records)

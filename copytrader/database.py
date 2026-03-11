@@ -515,6 +515,22 @@ def list_all_copy_orders(db_path: Path | str = DB_PATH) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def get_latest_copy_order_for_position(position_key: str, db_path: Path | str = DB_PATH) -> dict | None:
+    market_slug, _, outcome = position_key.partition(":")
+    with connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM copy_orders
+            WHERE status='FILLED' AND market_slug=? AND outcome=?
+            ORDER BY datetime(created_at) DESC, order_id DESC
+            LIMIT 1
+            """,
+            (market_slug, outcome),
+        ).fetchone()
+    return dict(row) if row else None
+
+
 def get_local_positions(db_path: Path | str = DB_PATH) -> list[dict]:
     with connect(db_path) as conn:
         rows = conn.execute(
