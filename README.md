@@ -21,6 +21,31 @@ python3 app.py
 
 Then open `http://127.0.0.1:8050`.
 
+You can also run on a different local port:
+
+```bash
+PORT=8060 python3 app.py
+```
+
+## Deploy To EC2
+
+This repo includes:
+
+- [wsgi.py](/Users/marco/Documents/AI Shit/CopyPelosi/wsgi.py) for Gunicorn
+- [deploy/copycat.service](/Users/marco/Documents/AI Shit/CopyPelosi/deploy/copycat.service) for `systemd`
+- [deploy/nginx-copycat.conf](/Users/marco/Documents/AI Shit/CopyPelosi/deploy/nginx-copycat.conf) for Nginx
+- [deploy/bootstrap_ec2.sh](/Users/marco/Documents/AI Shit/CopyPelosi/deploy/bootstrap_ec2.sh) to install and start the app on Ubuntu EC2
+
+Typical EC2 flow:
+
+```bash
+git clone https://github.com/mmelika/CopyCat.git
+cd CopyCat
+bash deploy/bootstrap_ec2.sh
+```
+
+If you want me to do the EC2 deployment directly, I need the instance IP or DNS name, the SSH username, and a usable SSH key path or access method.
+
 ## Notes
 
 - Persistence lives in [data/copytrader.db](/Users/marco/Documents/AI Shit/CopyPelosi/data/copytrader.db) after the first run.

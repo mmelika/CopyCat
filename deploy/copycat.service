@@ -1,0 +1,18 @@
+[Unit]
+Description=CopyCat Dash App
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/CopyCat
+Environment=PYTHONUNBUFFERED=1
+Environment=HOST=127.0.0.1
+Environment=PORT=8060
+ExecStart=/home/ubuntu/CopyCat/.venv/bin/gunicorn --workers 2 --threads 4 --bind 127.0.0.1:8060 wsgi:server
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+

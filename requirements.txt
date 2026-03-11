@@ -1,4 +1,4 @@
 dash>=2.18,<3.0
+gunicorn>=23.0,<24.0
 plotly>=5.24,<6.0
 requests>=2.32,<3.0
-
