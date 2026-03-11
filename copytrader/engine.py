@@ -12,7 +12,9 @@ from .config import DB_PATH
 from .polymarket import PolymarketClient
 
 MIN_BET_USD = 0.05
-MEANINGFUL_MIN_BET_USD = 0.50
+MEANINGFUL_MIN_BET_USD = 1.00
+BASE_TRADE_PCT = 0.02
+MAX_TRADE_USD = 20.0
 
 
 def _clamp(value: float, lower: float, upper: float) -> float:
@@ -29,8 +31,7 @@ def _bankroll_bet_size(bankroll: float) -> float:
     bankroll = max(float(bankroll), 0.0)
     if bankroll <= 0:
         return 0.0
-    percent = 0.10 if bankroll < 100 else 0.05
-    sized_amount = min(bankroll * percent, 20.0)
+    sized_amount = min(bankroll * BASE_TRADE_PCT, MAX_TRADE_USD)
     return max(_round_up_to_cent(sized_amount), MIN_BET_USD)
 
 
@@ -56,7 +57,7 @@ def _copy_trade_size(local_equity: float, source_amount_usd: float, leader_walle
     # but keep a meaningful floor so small source trades do not collapse into pennies.
     aggression_fraction = _clamp(source_amount_usd / leader_wallet_value, 0.0, 1.0)
     scaled_amount = _round_up_to_cent(local_equity * aggression_fraction)
-    return min(max(scaled_amount, baseline), 20.0)
+    return min(max(scaled_amount, baseline), MAX_TRADE_USD)
 
 
 @dataclass
