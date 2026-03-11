@@ -879,6 +879,28 @@ def save_settings(_, target_handle, target_wallet, leader_wallet, max_exposure, 
 
 
 @app.callback(
+    Output("add-money-status", "children"),
+    Output("add-paper-money-input", "value"),
+    Input("add-paper-money-btn", "n_clicks"),
+    State("add-paper-money-input", "value"),
+    prevent_initial_call=True,
+)
+def add_paper_money(_, amount_str):
+    try:
+        amount = float(amount_str or 0)
+        if amount <= 0:
+            return "Amount must be positive.", ""
+        settings = database.get_settings(DB_PATH)
+        current_cash = float(settings["paper_cash_balance"] or 0)
+        new_cash = round(current_cash + amount, 2)
+        database.update_settings({"paper_cash_balance": new_cash}, DB_PATH)
+        database.log("INFO", "settings", f"Added ${amount:,.2f} paper money. New cash: ${new_cash:,.2f}", db_path=DB_PATH)
+        return f"+${amount:,.2f} added. New balance: ${new_cash:,.2f}", ""
+    except (ValueError, TypeError):
+        return "Invalid amount.", ""
+
+
+@app.callback(
     Output("toggle-engine-btn", "n_clicks"),
     Input("toggle-engine-btn", "n_clicks"),
     prevent_initial_call=True,
