@@ -18,10 +18,23 @@ MEANINGFUL_MIN_BET_USD = 1.00
 MIN_CASH_RESERVE_PCT = 0.20
 MAX_SINGLE_BET_CASH_PCT = 0.20
 MAX_TRADE_FETCH_LIMIT = 10
+BUY_REPLAY_GUARD_SECONDS = 15
 
 
 def _clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
+
+
+def _parse_iso(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _normalize_text(value: str) -> str:
@@ -827,6 +840,12 @@ class CopyTradingEngine:
         latest_order = database.get_latest_copy_order_for_position(position_key, self.db_path)
         if not latest_order or latest_order.get("side") != "BUY":
             return None
+        latest_order_time = _parse_iso(latest_order.get("created_at") or "")
+        source_trade_time = _parse_iso(trade.get("created_at") or "")
+        if latest_order_time and source_trade_time:
+            age_seconds = abs((latest_order_time - source_trade_time).total_seconds())
+            if age_seconds <= BUY_REPLAY_GUARD_SECONDS:
+                return "Already copied a recent buy for this outcome."
         source_price = max(float(trade.get("price") or 0.0), 0.01)
         slippage = float(settings["slippage_bps"]) / 10000.0
         executed_price = round(_clamp(source_price * (1 + slippage), 0.01, 0.99), 4)

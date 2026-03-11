@@ -6,6 +6,7 @@ Standalone Dash platform for paper copy-trading a single Polymarket user, defaul
 
 - Resolves one Polymarket profile or wallet target.
 - Polls the target's recent trades and positions on a short interval.
+- Collapses bursty same-outcome source fills so one laddered order does not get copied as many separate buys.
 - Stores source activity, sync history, copied orders, local paper positions, and logs in SQLite.
 - Applies copy-trade decisioning for a local paper portfolio with exposure caps and sell controls.
 - Renders a monitoring dashboard with live status, tables, charting, logs, and a settings modal.

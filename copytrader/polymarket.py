@@ -9,6 +9,9 @@ import re
 from .config import API_TIMEOUT_SECONDS, USER_AGENT
 
 
+BURST_TRADE_WINDOW_SECONDS = 2
+
+
 def _to_float(value: Any, default: float = 0.0) -> float:
     try:
         if value in (None, ""):
@@ -43,6 +46,13 @@ def _iso(value: Any) -> str:
         return parsed.astimezone(timezone.utc).replace(microsecond=0).isoformat()
     except ValueError:
         return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _parse_iso(value: str) -> datetime:
+    parsed = datetime.fromisoformat((value or "").replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 class PolymarketClient:
@@ -198,7 +208,64 @@ class PolymarketClient:
                 }
             )
         trades.sort(key=lambda item: item["created_at"])
-        return trades
+        return self._collapse_burst_trades(trades)
+
+    def _collapse_burst_trades(self, trades: list[dict]) -> list[dict]:
+        collapsed: list[dict] = []
+        for trade in trades:
+            if not collapsed:
+                collapsed.append(trade)
+                continue
+
+            previous = collapsed[-1]
+            if not self._can_merge_trades(previous, trade):
+                collapsed.append(trade)
+                continue
+
+            previous_amount = _to_float(previous.get("amount_usd"), 0.0)
+            trade_amount = _to_float(trade.get("amount_usd"), 0.0)
+            merged_amount = round(previous_amount + trade_amount, 4)
+
+            previous_shares = _to_float(previous.get("shares"), 0.0)
+            trade_shares = _to_float(trade.get("shares"), 0.0)
+            merged_shares = round(previous_shares + trade_shares, 6)
+
+            weighted_notional = previous_amount + trade_amount
+            if weighted_notional > 0:
+                merged_price = round(
+                    ((_to_float(previous.get("price"), 0.0) * previous_amount) + (_to_float(trade.get("price"), 0.0) * trade_amount))
+                    / weighted_notional,
+                    6,
+                )
+            else:
+                merged_price = max(_to_float(previous.get("price"), 0.0), _to_float(trade.get("price"), 0.0))
+
+            previous["amount_usd"] = merged_amount
+            previous["shares"] = merged_shares
+            previous["price"] = merged_price
+            previous["created_at"] = max(previous.get("created_at", ""), trade.get("created_at", ""))
+            previous["source_trade_id"] = f"{previous['source_trade_id']}+{trade['source_trade_id']}"
+            previous["status"] = trade.get("status") or previous.get("status")
+        return collapsed
+
+    def _can_merge_trades(self, previous: dict, current: dict) -> bool:
+        keys_to_match = ("source_wallet", "market_slug", "outcome", "side")
+        if any((previous.get(key) or "") != (current.get(key) or "") for key in keys_to_match):
+            return False
+
+        previous_condition = _clean_id(previous.get("condition_id"))
+        current_condition = _clean_id(current.get("condition_id"))
+        if previous_condition and current_condition and previous_condition != current_condition:
+            return False
+
+        previous_token = _clean_id(previous.get("token_id"))
+        current_token = _clean_id(current.get("token_id"))
+        if previous_token and current_token and previous_token != current_token:
+            return False
+
+        previous_time = _parse_iso(previous.get("created_at", ""))
+        current_time = _parse_iso(current.get("created_at", ""))
+        return (current_time - previous_time).total_seconds() <= BURST_TRADE_WINDOW_SECONDS
 
     def _normalize_positions(self, payload: Any) -> list[dict]:
         items = payload if isinstance(payload, list) else payload.get("data") or payload.get("items") or payload.get("positions") or []
