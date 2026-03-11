@@ -177,49 +177,94 @@ def topbar():
     )
 
 
-def market_strip():
-    item = lambda label, value_id: html.Div(
-        className="market-strip-item",
+def overview_metric(label: str, value_id: str, sub_id: str | None = None, tone_id: str | None = None):
+    children = [
+        html.Div(label, className="overview-metric-label"),
+        html.Div(id=value_id, className="overview-metric-value"),
+    ]
+    if tone_id:
+        children.append(html.Div(id=tone_id, className="stat-chip"))
+    if sub_id:
+        children.append(html.Div(id=sub_id, className="overview-metric-sub"))
+    return html.Div(
+        className="overview-metric-card",
+        children=children,
+    )
+
+
+def overview_shell():
+    kv = lambda label, value_id: html.Div(
+        className="signal-item",
         children=[
-            html.Div(label, className="market-strip-label"),
-            html.Div(id=value_id, className="market-strip-value mono"),
+            html.Div(label, className="signal-label"),
+            html.Div(id=value_id, className="signal-value"),
         ],
     )
     return html.Div(
-        className="market-strip",
+        className="overview-grid",
         children=[
             html.Div(
-                className="market-strip-primary",
+                className="hero-panel",
                 children=[
-                    html.Div("Lead Account", className="market-strip-label"),
-                    html.Div(id="market-lead", className="market-strip-headline"),
-                    html.Div(id="market-lead-sub", className="market-strip-sub"),
+                    html.Div(
+                        className="hero-header",
+                        children=[
+                            html.Div(
+                                children=[
+                                    html.Div("Portfolio NAV", className="hero-eyebrow"),
+                                    html.Div(id="hero-nav", className="hero-value"),
+                                ]
+                            ),
+                            html.Div(id="hero-return-chip", className="hero-return-chip"),
+                        ],
+                    ),
+                    html.Div(id="hero-subtitle", className="hero-subtitle"),
+                    html.Div(
+                        className="hero-metrics",
+                        children=[
+                            overview_metric("Cash Available", "hero-cash", "hero-cash-sub"),
+                            overview_metric("Gross Exposure", "hero-exposure", "hero-exposure-sub", "hero-exposure-chip"),
+                            overview_metric("Copy Fill Rate", "hero-fill-rate", "hero-fill-sub"),
+                            overview_metric("Open Positions", "hero-open-positions", "hero-open-sub"),
+                        ],
+                    ),
                 ],
             ),
             html.Div(
-                className="market-strip-grid",
+                className="signal-panel",
                 children=[
-                    item("Heartbeat", "market-heartbeat"),
-                    item("Sync Cadence", "market-cadence"),
-                    item("Exposure Cap", "market-exposure"),
-                    item("Leader NAV", "market-leader-nav"),
+                    html.Div(
+                        className="signal-header",
+                        children=[
+                            html.Div("Execution Status", className="section-title"),
+                            html.Div(id="signal-runtime", className="badge"),
+                        ],
+                    ),
+                    html.Div(id="signal-summary", className="signal-summary"),
+                    html.Div(
+                        className="signal-grid",
+                        children=[
+                            kv("Lead Trader", "signal-trader"),
+                            kv("Target Wallet", "signal-wallet"),
+                            kv("Heartbeat", "signal-heartbeat"),
+                            kv("Sync Cadence", "signal-cadence"),
+                            kv("Leader NAV", "signal-leader-nav"),
+                            kv("Pending Queue", "signal-pending"),
+                        ],
+                    ),
                 ],
             ),
         ],
     )
 
 
-def stat_card(label: str, value_id: str, sub_id: str | None = None, tone_id: str | None = None):
-    value_row = [html.Div(id=value_id, className="stat-value")]
+def pulse_card(title: str, value_id: str, sub_id: str | None = None, tone_id: str | None = None):
+    children = [html.Div(title, className="pulse-label"), html.Div(id=value_id, className="pulse-value")]
     if tone_id:
-        value_row.append(html.Div(id=tone_id, className="stat-chip"))
-    children = [
-        html.Div(label, className="stat-label"),
-        html.Div(className="stat-value-row", children=value_row),
-    ]
+        children.append(html.Div(id=tone_id, className="stat-chip"))
     if sub_id:
-        children.append(html.Div(id=sub_id, className="stat-sub"))
-    return html.Div(className="stat-card", children=children)
+        children.append(html.Div(id=sub_id, className="pulse-sub"))
+    return html.Div(className="pulse-card", children=children)
 
 
 def section(title: str, body_id: str, badge_id: str | None = None, graph: bool = False):
@@ -338,34 +383,34 @@ app.layout = html.Div(
         html.Div(
             className="page",
             children=[
-                market_strip(),
+                overview_shell(),
                 html.Div(
-                    className="stats-row",
+                    className="pulse-grid",
                     children=[
-                        stat_card("Tracked Trader", "stat-target", "stat-target-sub"),
-                        stat_card("Pending Copies", "stat-pending", "stat-pending-sub"),
-                        stat_card("Copied Notional", "stat-copied-notional", "stat-copied-sub"),
-                        stat_card("Paper Portfolio", "stat-net-value", "stat-net-sub", "stat-net-chip"),
+                        pulse_card("Realized Today", "pulse-daily-realized", "pulse-daily-realized-sub", "pulse-daily-realized-chip"),
+                        pulse_card("Unrealized P/L", "pulse-unrealized", "pulse-unrealized-sub", "pulse-unrealized-chip"),
+                        pulse_card("Copied Volume", "pulse-copied-notional", "pulse-copied-sub"),
+                        pulse_card("Recent Syncs", "pulse-sync-health", "pulse-sync-sub", "pulse-sync-chip"),
                     ],
                 ),
                 html.Div(
                     className="dashboard-grid",
                     children=[
                         html.Div(
-                            className="dashboard-col",
+                            className="dashboard-col dashboard-col-wide",
                             children=[
-                                section("Source Positions", "source-positions-table", "source-positions-badge"),
                                 section("Paper Portfolio Curve", "portfolio-chart", graph=True),
+                                trade_views(),
                                 section("Daily Performance", "daily-performance-table", "daily-performance-badge"),
-                                section("Sync History", "sync-history-table", "sync-history-badge"),
                             ],
                         ),
                         html.Div(
                             className="dashboard-col",
                             children=[
+                                section("Execution Brief", "analysis-panel"),
+                                section("Source Positions", "source-positions-table", "source-positions-badge"),
                                 section("Copied Trades", "copied-trades-table", "copied-trades-badge"),
-                                trade_views(),
-                                section("Live Analysis", "analysis-panel"),
+                                section("Sync History", "sync-history-table", "sync-history-badge"),
                                 section("Engine Log", "engine-log-table", "engine-log-badge"),
                             ],
                         ),
@@ -398,17 +443,20 @@ def portfolio_chart():
         snapshots = [{"ts": "-", "net_value": 0.0}]
     baseline = float(snapshots[0]["net_value"] or 0.0)
     x_values = [fmt_pacific_time(row["ts"]) for row in snapshots]
-    y_values = [row["net_value"] for row in snapshots]
-    colors = ["#22c55e" if value >= baseline else "#ef4444" for value in y_values]
+    y_values = [float(row["net_value"] or 0.0) for row in snapshots]
+    current_value = y_values[-1]
+    is_up = current_value >= baseline
+    line_color = "#00c805" if is_up else "#ff5a63"
+    fill_color = "rgba(0, 200, 5, 0.18)" if is_up else "rgba(255, 90, 99, 0.18)"
     figure = go.Figure()
     figure.add_trace(
         go.Scatter(
             x=x_values,
             y=y_values,
             mode="lines",
-            line={"color": "#22c55e" if y_values[-1] >= baseline else "#ef4444", "width": 3},
+            line={"color": line_color, "width": 3.5, "shape": "spline", "smoothing": 0.55},
             fill="tozeroy",
-            fillcolor="rgba(34,197,94,0.12)" if y_values[-1] >= baseline else "rgba(239,68,68,0.12)",
+            fillcolor=fill_color,
             hovertemplate="%{y:$,.2f}<extra></extra>",
         )
     )
@@ -417,38 +465,32 @@ def portfolio_chart():
             x=x_values,
             y=[baseline for _ in y_values],
             mode="lines",
-            line={"color": "rgba(255,255,255,0.18)", "width": 1, "dash": "dot"},
+            line={"color": "rgba(255,255,255,0.10)", "width": 1, "dash": "dot"},
             hoverinfo="skip",
             showlegend=False,
         )
     )
-    figure.add_trace(
-        go.Scatter(
-            x=x_values,
-            y=y_values,
-            mode="markers",
-            marker={"color": colors, "size": 6, "line": {"width": 0}},
-            hovertemplate="%{y:$,.2f}<extra></extra>",
-            showlegend=False,
-        )
-    )
     figure.update_layout(
-        paper_bgcolor="#111114",
-        plot_bgcolor="#111114",
-        margin={"l": 18, "r": 18, "t": 8, "b": 24},
-        font={"color": "#a1a1aa", "family": "Space Grotesk"},
-        xaxis={"showgrid": False, "zeroline": False, "showline": False, "tickfont": {"size": 10}},
-        yaxis={"gridcolor": "rgba(255,255,255,0.06)", "zeroline": False, "tickprefix": "$"},
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        margin={"l": 8, "r": 8, "t": 6, "b": 24},
+        font={"color": "#6f7d8b", "family": "Manrope"},
+        hovermode="x unified",
+        hoverlabel={"bgcolor": "#0f1419", "bordercolor": "rgba(255,255,255,0.06)", "font": {"color": "#f5f8fb"}},
+        xaxis={"showgrid": False, "zeroline": False, "showline": False, "tickfont": {"size": 10, "color": "#7b8794"}, "ticklen": 0},
+        yaxis={"showgrid": False, "zeroline": False, "showticklabels": False, "fixedrange": True},
     )
     figure.add_annotation(
         x=x_values[-1],
-        y=y_values[-1],
-        text=fmt_signed_currency(y_values[-1] - baseline),
+        y=current_value,
+        text=fmt_signed_currency(current_value - baseline),
         showarrow=False,
         xanchor="left",
         yanchor="bottom",
-        font={"color": "#22c55e" if y_values[-1] >= baseline else "#ef4444", "size": 12},
-        bgcolor="#111114",
+        font={"color": line_color, "size": 12, "family": "IBM Plex Mono"},
+        bgcolor="rgba(9,15,21,0.92)",
+        bordercolor="rgba(255,255,255,0.06)",
+        borderpad=6,
     )
     return figure
 
@@ -459,22 +501,42 @@ def portfolio_chart():
     Output("toggle-engine-btn", "children"),
     Output("refresh-text", "children"),
     Output("clock", "children"),
-    Output("market-lead", "children"),
-    Output("market-lead-sub", "children"),
-    Output("market-heartbeat", "children"),
-    Output("market-cadence", "children"),
-    Output("market-exposure", "children"),
-    Output("market-leader-nav", "children"),
-    Output("stat-target", "children"),
-    Output("stat-target-sub", "children"),
-    Output("stat-pending", "children"),
-    Output("stat-pending-sub", "children"),
-    Output("stat-copied-notional", "children"),
-    Output("stat-copied-sub", "children"),
-    Output("stat-net-value", "children"),
-    Output("stat-net-chip", "children"),
-    Output("stat-net-chip", "className"),
-    Output("stat-net-sub", "children"),
+    Output("hero-nav", "children"),
+    Output("hero-return-chip", "children"),
+    Output("hero-return-chip", "className"),
+    Output("hero-subtitle", "children"),
+    Output("hero-cash", "children"),
+    Output("hero-cash-sub", "children"),
+    Output("hero-exposure", "children"),
+    Output("hero-exposure-chip", "children"),
+    Output("hero-exposure-chip", "className"),
+    Output("hero-exposure-sub", "children"),
+    Output("hero-fill-rate", "children"),
+    Output("hero-fill-sub", "children"),
+    Output("hero-open-positions", "children"),
+    Output("hero-open-sub", "children"),
+    Output("signal-runtime", "children"),
+    Output("signal-summary", "children"),
+    Output("signal-trader", "children"),
+    Output("signal-wallet", "children"),
+    Output("signal-heartbeat", "children"),
+    Output("signal-cadence", "children"),
+    Output("signal-leader-nav", "children"),
+    Output("signal-pending", "children"),
+    Output("pulse-daily-realized", "children"),
+    Output("pulse-daily-realized-sub", "children"),
+    Output("pulse-daily-realized-chip", "children"),
+    Output("pulse-daily-realized-chip", "className"),
+    Output("pulse-unrealized", "children"),
+    Output("pulse-unrealized-sub", "children"),
+    Output("pulse-unrealized-chip", "children"),
+    Output("pulse-unrealized-chip", "className"),
+    Output("pulse-copied-notional", "children"),
+    Output("pulse-copied-sub", "children"),
+    Output("pulse-sync-health", "children"),
+    Output("pulse-sync-sub", "children"),
+    Output("pulse-sync-chip", "children"),
+    Output("pulse-sync-chip", "className"),
     Output("source-positions-badge", "children"),
     Output("source-positions-table", "children"),
     Output("portfolio-chart", "figure"),
@@ -505,8 +567,23 @@ def refresh_dashboard(_, trade_tab):
     analytics = database.trade_analytics(DB_PATH)
     daily_performance = database.daily_portfolio_performance(DB_PATH)[:12]
     daily_realized_map = {row["date"]: row["realized_pnl"] for row in analytics["daily_realized"]}
+    open_trades = analytics["open_trades"]
+    closed_trades = analytics["closed_trades"]
 
     copied_notional = sum(row["requested_amount_usd"] for row in copy_orders if row["status"] == "FILLED")
+    filled_orders = [row for row in copy_orders if row["status"] == "FILLED"]
+    latest_daily = daily_performance[0] if daily_performance else None
+    daily_realized = float(daily_realized_map.get(latest_daily["date"], 0.0)) if latest_daily else 0.0
+    unrealized_total = sum(float(row["unrealized_pnl"]) for row in open_trades)
+    exposure_cap = float(settings["max_total_exposure_usd"] or 0.0)
+    gross_exposure = float(portfolio["gross_exposure"] or 0.0)
+    exposure_usage = (gross_exposure / exposure_cap * 100.0) if exposure_cap > 0 else 0.0
+    fill_rate = (len(filled_orders) / len(copy_orders) * 100.0) if copy_orders else 0.0
+    sync_success_count = len([row for row in sync_runs if row["status"] == "SUCCESS"])
+    sync_success_rate = (sync_success_count / len(sync_runs) * 100.0) if sync_runs else 0.0
+    latest_sync = sync_runs[0] if sync_runs else None
+    latest_latency = f"{latest_sync['latency_ms']}ms" if latest_sync and latest_sync.get("latency_ms") is not None else "-"
+
     source_position_rows = [
         [
             short_text(row["market_title"], 36),
@@ -538,7 +615,6 @@ def refresh_dashboard(_, trade_tab):
         ]
         for row in daily_performance
     ] or [["No daily performance yet", "-", "-", "-"]]
-
     open_trade_rows = [
         [
             short_text(row["market_title"], 30),
@@ -548,7 +624,7 @@ def refresh_dashboard(_, trade_tab):
             fmt_currency(row["market_value"]),
             fmt_signed_currency(row["unrealized_pnl"]),
         ]
-        for row in analytics["open_trades"][:20]
+        for row in open_trades[:20]
     ] or [["No open trades", "-", "-", "-", "-", "-"]]
     closed_trade_rows = [
         [
@@ -560,14 +636,14 @@ def refresh_dashboard(_, trade_tab):
             fmt_currency(row["proceeds"]),
             fmt_signed_currency(row["pnl"]),
         ]
-        for row in analytics["closed_trades"][:20]
+        for row in closed_trades[:20]
     ] or [["No closed trades", "-", "-", "-", "-", "-", "-"]]
     trade_book_table = (
         render_table(["Market", "Outcome", "Shares", "Cost", "Value", "P/L"], open_trade_rows)
         if trade_tab == "open-trades"
         else render_table(["Sold At (PT)", "Market", "Outcome", "Shares", "Cost", "Proceeds", "P/L"], closed_trade_rows)
     )
-    trade_book_count = len(analytics["open_trades"]) if trade_tab == "open-trades" else len(analytics["closed_trades"])
+    trade_book_count = len(open_trades) if trade_tab == "open-trades" else len(closed_trades)
     sync_rows = [
         [
             fmt_pacific_time(row["started_at"]),
@@ -591,13 +667,14 @@ def refresh_dashboard(_, trade_tab):
 
     target_label = f"@{settings['target_handle']}" if settings["target_handle"] else "Wallet target"
     target_wallet = app_state.get("resolved_target_wallet") or settings["target_wallet"] or "Not resolved yet"
+    heartbeat = heartbeat_label(app_state, runtime_status, stale_age_seconds)
     analysis = html.Div(
         className="analysis-stack",
         children=[
             html.Div(
                 className="analysis-block",
                 children=[
-                    html.Div("Sync Status", className="analysis-label"),
+                    html.Div("Execution Posture", className="analysis-label"),
                     html.Div(
                         app_state["last_sync_message"]
                         if runtime_status != "STALE"
@@ -609,18 +686,17 @@ def refresh_dashboard(_, trade_tab):
             html.Div(
                 className="analysis-block",
                 children=[
-                    html.Div("Target Wallet", className="analysis-label"),
-                    html.Div(target_wallet, className="analysis-text mono"),
+                    html.Div("Account Mirror", className="analysis-label"),
+                    html.Div(f"{target_label} resolved to {target_wallet}.", className="analysis-text"),
                 ],
             ),
             html.Div(
                 className="analysis-block",
                 children=[
-                    html.Div("Fast Copy Model", className="analysis-label"),
+                    html.Div("Copy Configuration", className="analysis-label"),
                     html.Div(
-                        f"Polling every {settings['sync_interval_ms']}ms with {settings['trade_fetch_limit']} trade lookback. "
-                        "Paper execution sizes each copied trade at 10% of bankroll below $100, then 5% at $100+, "
-                        "with a hard cap of $20 per bet. The dashboard refreshes separately and never gates copy execution.",
+                        f"Polling every {settings['sync_interval_ms']}ms, fetch depth {settings['trade_fetch_limit']}, "
+                        f"slippage cap {settings['slippage_bps']} bps, sells {'on' if int(settings['copy_sells']) else 'off'}.",
                         className="analysis-text",
                     ),
                 ],
@@ -628,25 +704,22 @@ def refresh_dashboard(_, trade_tab):
             html.Div(
                 className="analysis-block",
                 children=[
-                    html.Div("Leader Wallet Value", className="analysis-label"),
+                    html.Div("Risk Budget", className="analysis-label"),
                     html.Div(
-                        fmt_currency(float(app_state.get("leader_wallet_value") or 0.0)),
-                        className="analysis-text mono",
+                        f"{fmt_currency(gross_exposure)} deployed against a {fmt_currency(exposure_cap)} cap "
+                        f"({exposure_usage:.1f}% used). Cash available is {fmt_currency(portfolio['cash_balance'])}.",
+                        className="analysis-text",
                     ),
                 ],
             ),
             html.Div(
                 className="analysis-block",
                 children=[
-                    html.Div("Copy Start Time", className="analysis-label"),
-                    html.Div(fmt_pacific_time(app_state.get("copy_start_at", "")) if app_state.get("copy_start_at") else "Immediate", className="analysis-text mono"),
-                ],
-            ),
-            html.Div(
-                className="analysis-block",
-                children=[
-                    html.Div("Last Error", className="analysis-label"),
-                    html.Div(app_state["last_error"] or "None", className="analysis-text"),
+                    html.Div("Operational Risk", className="analysis-label"),
+                    html.Div(
+                        app_state["last_error"] or f"Recent sync success rate is {sync_success_rate:.0f}% with latest latency {latest_latency}.",
+                        className="analysis-text",
+                    ),
                 ],
             ),
         ],
@@ -657,29 +730,49 @@ def refresh_dashboard(_, trade_tab):
     net_chip_text = f"{portfolio['total_gain_pct']:+.2f}%"
 
     return (
-        heartbeat_label(app_state, runtime_status, stale_age_seconds),
+        heartbeat,
         runtime_class,
         "Pause" if app_state["engine_status"] == "RUNNING" else "Resume",
         refresh_text,
         fmt_pacific_clock(),
-        target_label,
-        target_wallet,
-        heartbeat_label(app_state, runtime_status, stale_age_seconds),
-        f"{settings['sync_interval_ms']} ms",
-        fmt_currency(settings["max_total_exposure_usd"]),
-        fmt_currency(float(app_state.get("leader_wallet_value") or 0.0)),
-        target_label,
-        target_wallet,
-        str(len(pending)),
-        f"{len(copy_orders)} total copied orders",
-        fmt_currency(copied_notional),
-        f"Cash {fmt_currency(portfolio['cash_balance'])} / Exposure {fmt_currency(portfolio['gross_exposure'])}",
         fmt_currency(portfolio["net_value"]),
         net_chip_text,
-        f"stat-chip {signed_class(net_gain)}",
-        f"{fmt_signed_currency(portfolio['total_gain'])} ({portfolio['total_gain_pct']:+.2f}%) vs start",
+        f"hero-return-chip {signed_class(net_gain)}",
+        f"{fmt_signed_currency(net_gain)} since inception. Tracking {target_label} with {len(open_trades)} open positions.",
+        fmt_currency(portfolio["cash_balance"]),
+        f"{(float(portfolio['cash_balance']) / float(portfolio['net_value']) * 100.0):.1f}% of NAV is unallocated" if float(portfolio["net_value"]) else "No capital available",
+        fmt_currency(gross_exposure),
+        f"{exposure_usage:.1f}%",
+        f"stat-chip {signed_class(exposure_cap - gross_exposure if exposure_cap else 0)}",
+        f"Cap {fmt_currency(exposure_cap)}",
+        f"{fill_rate:.0f}%",
+        f"{len(filled_orders)} filled from {len(copy_orders)} copy attempts",
+        str(len(open_trades)),
+        f"{len(closed_trades)} trades have been closed",
+        runtime_status,
+        app_state["last_sync_message"] if runtime_status != "STALE" else f"Engine marked RUNNING but heartbeat is stale by {stale_age_seconds}s.",
+        target_label,
+        target_wallet,
+        heartbeat,
+        f"{settings['sync_interval_ms']} ms",
+        fmt_currency(float(app_state.get("leader_wallet_value") or 0.0)),
+        str(len(pending)),
+        fmt_signed_currency(daily_realized),
+        latest_daily["date"] if latest_daily else "No realized activity yet",
+        fmt_signed_currency(daily_realized),
+        f"stat-chip {signed_class(daily_realized)}",
+        fmt_signed_currency(unrealized_total),
+        f"Across {len(open_trades)} active positions",
+        fmt_signed_currency(unrealized_total),
+        f"stat-chip {signed_class(unrealized_total)}",
+        fmt_currency(copied_notional),
+        f"{len(filled_orders)} fills from the latest {len(copy_orders)} copy orders",
+        f"{sync_success_rate:.0f}%",
+        f"{len(sync_runs)} recent sync runs. Latest latency {latest_latency}.",
+        f"{sync_success_rate:.0f}%",
+        f"stat-chip {signed_class(sync_success_rate - 90)}",
         str(len(source_positions)),
-        render_table(["Market", "Outcome", "Shares", "Notional", "Price"], source_position_rows),
+        render_table(["Market", "Outcome", "Shares", "Value", "Price"], source_position_rows),
         portfolio_chart(),
         str(len(daily_performance)),
         render_table(["Date", "Day Change", "Closed P/L", "Portfolio"], daily_rows),
