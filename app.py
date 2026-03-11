@@ -817,23 +817,6 @@ def refresh_dashboard(_):
 
 
 @app.callback(
-    Output("settings-modal-store", "data"),
-    Input("open-settings-btn", "n_clicks"),
-    Input("close-settings-btn", "n_clicks"),
-    State("settings-modal-store", "data"),
-    prevent_initial_call=True,
-)
-def toggle_modal(open_clicks, close_clicks, store):
-    triggered = callback_context.triggered_id
-    if triggered == "open-settings-btn":
-        return {"open": True}
-    if triggered == "close-settings-btn":
-        return {"open": False}
-    return store
-
-
-@app.callback(
-    Output("settings-modal", "className"),
     Output("settings-target-handle", "value"),
     Output("settings-target-wallet", "value"),
     Output("settings-leader-wallet", "value"),
@@ -844,13 +827,11 @@ def toggle_modal(open_clicks, close_clicks, store):
     Output("settings-sync-interval", "value"),
     Output("settings-trade-limit", "value"),
     Output("settings-copy-sells", "value"),
-    Input("settings-modal-store", "data"),
     Input("refresh-interval", "n_intervals"),
 )
-def sync_modal(store, _):
+def sync_settings_tab(_):
     settings = database.get_settings(DB_PATH)
     return (
-        "modal-overlay" if store["open"] else "modal-overlay hidden",
         settings["target_handle"],
         settings["target_wallet"],
         settings["leader_wallet_address"],
@@ -865,7 +846,7 @@ def sync_modal(store, _):
 
 
 @app.callback(
-    Output("settings-modal-store", "data", allow_duplicate=True),
+    Output("save-settings-btn", "n_clicks"),
     Input("save-settings-btn", "n_clicks"),
     State("settings-target-handle", "value"),
     State("settings-target-wallet", "value"),
@@ -894,7 +875,7 @@ def save_settings(_, target_handle, target_wallet, leader_wallet, max_exposure, 
     }
     database.update_settings(updates, DB_PATH)
     database.log("INFO", "settings", "Settings updated from dashboard.", updates, DB_PATH)
-    return {"open": False}
+    return 0
 
 
 @app.callback(
