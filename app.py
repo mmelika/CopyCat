@@ -501,6 +501,7 @@ def portfolio_curve_card():
         className="portfolio-card",
         children=[
             dcc.Store(id="portfolio-range-store", data="1D"),
+            dcc.Store(id="portfolio-view-store", data="both"),
             html.Div(
                 className="portfolio-card-top",
                 children=[
@@ -515,6 +516,9 @@ def portfolio_curve_card():
                     html.Div(
                         className="portfolio-range-group",
                         children=[
+                            html.Button("Paper", id="portfolio-view-paper", className="portfolio-view-btn", n_clicks=0),
+                            html.Button("Shadow", id="portfolio-view-shadow", className="portfolio-view-btn", n_clicks=0),
+                            html.Button("Both", id="portfolio-view-both", className="portfolio-view-btn portfolio-view-btn-active", n_clicks=0),
                             html.Button("1D", id="portfolio-range-1d", className="portfolio-range-btn", n_clicks=0),
                             html.Button("1W", id="portfolio-range-1w", className="portfolio-range-btn", n_clicks=0),
                             html.Button("1M", id="portfolio-range-1m", className="portfolio-range-btn", n_clicks=0),
@@ -592,7 +596,7 @@ def render_table(headers, rows):
     )
 
 
-def portfolio_chart(range_key: str):
+def portfolio_chart(range_key: str, view_key: str = "both"):
     settings = database.get_settings(DB_PATH)
     snapshots = database.list_portfolio_snapshots(DB_PATH, limit=720)
     shadow_snapshots = database.list_shadow_portfolio_snapshots(DB_PATH, limit=720)
@@ -624,20 +628,21 @@ def portfolio_chart(range_key: str):
     y_values = [float(row["net_value"] or 0.0) for row in snapshots]
 
     figure = go.Figure()
-    figure.add_trace(
-        go.Scatter(
-            x=x_values,
-            y=y_values,
-            mode="lines",
-            line={"color": line_color, "width": 4, "shape": "spline", "smoothing": 1.05},
-            fill="tozeroy",
-            fillcolor=fill_color,
-            hovertemplate="%{x}<br>%{y:$,.2f}<extra></extra>",
-            showlegend=False,
+    if view_key in {"paper", "both"}:
+        figure.add_trace(
+            go.Scatter(
+                x=x_values,
+                y=y_values,
+                mode="lines",
+                line={"color": line_color, "width": 4, "shape": "spline", "smoothing": 1.05},
+                fill="tozeroy" if view_key == "paper" else None,
+                fillcolor=fill_color,
+                hovertemplate="Paper %{x}<br>%{y:$,.2f}<extra></extra>",
+                showlegend=False,
+            )
         )
-    )
     shadow_mode_active = (settings.get("execution_mode") or "paper").strip().lower() == "shadow"
-    if shadow_mode_active and shadow_snapshots:
+    if shadow_mode_active and shadow_snapshots and view_key in {"shadow", "both"}:
         shadow_x_values = [to_pacific(row["ts"]).strftime("%b %d %I:%M %p") if to_pacific(row["ts"]) else row["ts"] for row in shadow_snapshots]
         shadow_y_values = [float(row["net_value"] or 0.0) for row in shadow_snapshots]
         figure.add_trace(
@@ -645,7 +650,9 @@ def portfolio_chart(range_key: str):
                 x=shadow_x_values,
                 y=shadow_y_values,
                 mode="lines",
-                line={"color": "#ffbf47", "width": 2.5, "dash": "dot"},
+                line={"color": "#ffbf47", "width": 4 if view_key == "shadow" else 2.5, "dash": "dot"},
+                fill="tozeroy" if view_key == "shadow" else None,
+                fillcolor="rgba(255,191,71,0.12)",
                 hovertemplate="Shadow %{x}<br>%{y:$,.2f}<extra></extra>",
                 name="Shadow",
                 showlegend=False,
@@ -713,20 +720,43 @@ def set_portfolio_range(_, __, ___, ____, current_range):
 
 
 @app.callback(
+    Output("portfolio-view-store", "data"),
+    Input("portfolio-view-paper", "n_clicks"),
+    Input("portfolio-view-shadow", "n_clicks"),
+    Input("portfolio-view-both", "n_clicks"),
+    State("portfolio-view-store", "data"),
+    prevent_initial_call=True,
+)
+def set_portfolio_view(_, __, ___, current_view):
+    mapping = {
+        "portfolio-view-paper": "paper",
+        "portfolio-view-shadow": "shadow",
+        "portfolio-view-both": "both",
+    }
+    return mapping.get(callback_context.triggered_id, current_view)
+
+
+@app.callback(
     Output("portfolio-chart", "figure"),
     Output("portfolio-chart-amount", "children"),
     Output("portfolio-chart-subtitle", "children"),
+    Output("portfolio-view-paper", "className"),
+    Output("portfolio-view-shadow", "className"),
+    Output("portfolio-view-both", "className"),
     Output("portfolio-range-1d", "className"),
     Output("portfolio-range-1w", "className"),
     Output("portfolio-range-1m", "className"),
     Output("portfolio-range-all", "className"),
     Input("refresh-interval", "n_intervals"),
     Input("portfolio-range-store", "data"),
+    Input("portfolio-view-store", "data"),
 )
-def refresh_portfolio_chart(_, range_key):
+def refresh_portfolio_chart(_, range_key, view_key):
     selected_range = range_key or "1D"
+    selected_view = view_key or "both"
     settings = database.get_settings(DB_PATH)
     snapshots = database.list_portfolio_snapshots(DB_PATH, limit=720)
+    shadow_snapshots = database.list_shadow_portfolio_snapshots(DB_PATH, limit=720)
     if not snapshots:
         amount_text = fmt_signed_currency(0.0)
     else:
@@ -742,8 +772,14 @@ def refresh_portfolio_chart(_, range_key):
             scoped = [row for row in snapshots if (parse_utc(row["ts"]) or end_time) >= start_time]
             if scoped:
                 filtered = scoped
-        baseline = float(filtered[0]["net_value"] or 0.0)
-        current_value = float(filtered[-1]["net_value"] or 0.0)
+            shadow_scoped = [row for row in shadow_snapshots if (parse_utc(row["ts"]) or end_time) >= start_time]
+            if shadow_scoped:
+                shadow_snapshots = shadow_scoped
+        focus_snapshots = filtered
+        if selected_view == "shadow" and shadow_snapshots:
+            focus_snapshots = shadow_snapshots
+        baseline = float(focus_snapshots[0]["net_value"] or 0.0)
+        current_value = float(focus_snapshots[-1]["net_value"] or 0.0)
         amount_text = fmt_signed_currency(current_value - baseline)
 
     subtitle_map = {
@@ -754,14 +790,18 @@ def refresh_portfolio_chart(_, range_key):
     }
     subtitle = subtitle_map.get(selected_range, "Past Day")
     if (settings.get("execution_mode") or "paper").strip().lower() == "shadow":
-        subtitle = f"{subtitle} | solid paper, dotted shadow"
+        subtitle = f"{subtitle} | viewing {selected_view}"
+    view_button_classes = []
+    for key in ("paper", "shadow", "both"):
+        view_button_classes.append("portfolio-view-btn portfolio-view-btn-active" if key == selected_view else "portfolio-view-btn")
     button_classes = []
     for key in ("1D", "1W", "1M", "ALL"):
         button_classes.append("portfolio-range-btn portfolio-range-btn-active" if key == selected_range else "portfolio-range-btn")
     return (
-        portfolio_chart(selected_range),
+        portfolio_chart(selected_range, selected_view),
         amount_text,
         subtitle,
+        *view_button_classes,
         *button_classes,
     )
 
@@ -813,8 +853,9 @@ def refresh_portfolio_chart(_, range_key):
     Output("engine-log-table", "children"),
     Input("refresh-interval", "n_intervals"),
     Input("trade-tabs", "value"),
+    Input("portfolio-view-store", "data"),
 )
-def refresh_dashboard(_, trade_tab):
+def refresh_dashboard(_, trade_tab, view_key):
     settings = database.get_settings(DB_PATH)
     app_state = database.get_app_state(DB_PATH)
     runtime_status, runtime_class, stale_age_seconds = engine_runtime_status(app_state, settings)
@@ -1112,6 +1153,7 @@ def refresh_dashboard(_, trade_tab):
     target_wallet = app_state.get("resolved_target_wallet") or settings["target_wallet"] or "Not resolved yet"
     execution_mode = (settings.get("execution_mode") or "paper").strip().lower()
     shadow_mode_active = execution_mode == "shadow"
+    selected_view = view_key or "both"
     execution_pill_text = "SHADOW MODE" if shadow_mode_active else "PAPER MODE"
     execution_pill_class = "mode-pill mode-shadow" if shadow_mode_active else "mode-pill mode-paper"
     market_execution = (
@@ -1146,6 +1188,22 @@ def refresh_dashboard(_, trade_tab):
         ]
         for row in shadow_orders[:6]
     ] or [["No shadow fills yet", "-", "-", "-", "-", "-"]]
+    compare_table_rows = shadow_fill_rows
+    compare_headers = ["Time (PT)", "Market", "Side", "Paper Px", "Shadow Px", "Delta"]
+    if selected_view == "paper":
+        compare_headers = ["Metric", "Value"]
+        compare_table_rows = [
+            ["Paper Net", fmt_currency(portfolio["net_value"])],
+            ["Paper Positions", str(portfolio["positions_count"])],
+            ["Paper Gain", fmt_signed_currency(portfolio["total_gain"])],
+        ]
+    elif selected_view == "shadow":
+        compare_headers = ["Metric", "Value"]
+        compare_table_rows = [
+            ["Shadow Net", shadow_net_display],
+            ["Shadow Positions", shadow_positions_sub],
+            ["Avg Fill Drift", f"{shadow_summary['avg_abs_price_delta_bps']:.1f}bps" if shadow_has_history else "-"],
+        ]
     compare_panel = html.Div(
         className="compare-stack",
         children=[
@@ -1199,8 +1257,8 @@ def refresh_dashboard(_, trade_tab):
             html.Div(
                 className="compare-table",
                 children=render_table(
-                    ["Time (PT)", "Market", "Side", "Paper Px", "Shadow Px", "Delta"],
-                    shadow_fill_rows,
+                    compare_headers,
+                    compare_table_rows,
                 ),
             ),
         ],
