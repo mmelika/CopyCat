@@ -21,8 +21,7 @@ MAX_TRADE_FETCH_LIMIT = 10
 SOURCE_POSITION_FETCH_LIMIT = 200
 BUY_REPLAY_GUARD_SECONDS = 15
 FRESH_FILL_MARK_GRACE_SECONDS = 5
-EXPOSURE_CAP_STEP_NET_VALUE_USD = 20.0
-EXPOSURE_CAP_STEP_INCREASE_USD = 10.0
+EXPOSURE_CAP_BUFFER_USD = 30.0
 AUTO_PROFIT_TAKE_THRESHOLD = 0.70
 FULLY_PRICED_EXIT_THRESHOLD = 0.999
 
@@ -116,13 +115,8 @@ def _copy_trade_size(local_equity: float, source_amount_usd: float, leader_walle
 
 
 def _effective_exposure_cap(settings: dict, portfolio: dict) -> float:
-    base_cap = max(float(settings.get("max_total_exposure_usd") or 0.0), 0.0)
-    starting_balance = max(float(settings.get("paper_starting_balance") or 0.0), 0.0)
     net_value = max(float(portfolio.get("net_value") or 0.0), 0.0)
-    gains_above_start = max(net_value - starting_balance, 0.0)
-    step_count = int(gains_above_start // EXPOSURE_CAP_STEP_NET_VALUE_USD)
-    dynamic_increase = step_count * EXPOSURE_CAP_STEP_INCREASE_USD
-    return round(base_cap + dynamic_increase, 2)
+    return round(max(net_value - EXPOSURE_CAP_BUFFER_USD, 0.0), 2)
 
 
 @dataclass

@@ -461,7 +461,7 @@ def settings_modal():
                             html.Div(
                                 className="modal-row modal-row-2",
                                 children=[
-                                    number_field("Max Total Exposure USD", "settings-max-exposure", "2500", "Hard cap on marked paper exposure before dynamic step-ups.", min_value=0, step=0.01),
+                                    number_field("Legacy Exposure Setting", "settings-max-exposure", "30", "Unused now. Exposure cap is automatically set to net liquidation value minus $30.", min_value=0, step=0.01),
                                     number_field("Paper Slippage Bps", "settings-slippage-bps", "30", "Execution slippage applied to simulated paper fills.", min_value=0, step=1),
                                 ],
                             ),
@@ -1148,7 +1148,8 @@ def refresh_dashboard(_, trade_tab):
         market_row = paper_row or shadow_row
         paper_entry = float(paper_row.get("avg_price") or 0.0)
         shadow_entry = float(shadow_row.get("avg_price") or 0.0)
-        entry_gap_cents = ((shadow_entry - paper_entry) * 100) if paper_entry and shadow_entry else 0.0
+        shadow_shares = float(shadow_row.get("shares") or 0.0)
+        entry_drag_usd = ((shadow_entry - paper_entry) * shadow_shares) if paper_entry and shadow_entry and shadow_shares else 0.0
         compare_position_rows.append(
             [
                 market_link(market_row.get("market_title"), market_row.get("market_slug"), 24),
@@ -1156,9 +1157,9 @@ def refresh_dashboard(_, trade_tab):
                 fmt_number(paper_entry, 3) if paper_entry else "-",
                 fmt_number(shadow_entry, 3) if shadow_entry else "-",
                 fmt_number(paper_row.get("shares"), 2) if paper_row.get("shares") else "-",
-                fmt_number(shadow_row.get("shares"), 2) if shadow_row.get("shares") else "-",
+                fmt_number(shadow_shares, 2) if shadow_shares else "-",
                 fmt_number((paper_row.get("current_price") or shadow_row.get("current_price") or 0.0), 3),
-                f"{entry_gap_cents:+.2f}c" if paper_entry and shadow_entry else "-",
+                fmt_signed_currency(entry_drag_usd) if paper_entry and shadow_entry and shadow_shares else "-",
             ]
         )
     compare_position_rows = compare_position_rows or [["No open positions to compare", "-", "-", "-", "-", "-", "-", "-"]]
@@ -1217,7 +1218,7 @@ def refresh_dashboard(_, trade_tab):
                 children=[
                     html.Div("Open Position Entries", className="analysis-label"),
                     render_table(
-                        ["Market", "Outcome", "Paper Entry", "Shadow Entry", "Paper Shares", "Shadow Shares", "Mark Px", "Entry Gap"],
+                        ["Market", "Outcome", "Paper Entry", "Shadow Entry", "Paper Shares", "Shadow Shares", "Mark Px", "Entry Drag"],
                         compare_position_rows,
                     ),
                 ],
