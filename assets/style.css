@@ -550,6 +550,51 @@ tbody td {
   gap: 8px;
 }
 
+.realized-performance-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.realized-performance-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.realized-metric {
+  padding: 14px 15px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(154, 188, 220, 0.10);
+}
+
+.realized-metric-label {
+  margin-bottom: 8px;
+  color: var(--faint);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.realized-metric-value {
+  color: var(--text);
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.realized-metric-sub {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.realized-performance-table {
+  overflow-x: auto;
+}
+
 .portfolio-holding-row {
   display: flex;
   justify-content: space-between;
@@ -882,6 +927,10 @@ tbody td {
   }
 
   .portfolio-breakdown-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .realized-performance-summary {
     grid-template-columns: 1fr;
   }
 }

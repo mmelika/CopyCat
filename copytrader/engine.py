@@ -18,10 +18,12 @@ MEANINGFUL_MIN_BET_USD = 1.00
 MIN_CASH_RESERVE_PCT = 0.20
 MAX_SINGLE_BET_CASH_PCT = 0.20
 MAX_TRADE_FETCH_LIMIT = 10
+SOURCE_POSITION_FETCH_LIMIT = 200
 BUY_REPLAY_GUARD_SECONDS = 15
 FRESH_FILL_MARK_GRACE_SECONDS = 5
 EXPOSURE_CAP_STEP_NET_VALUE_USD = 20.0
 EXPOSURE_CAP_STEP_INCREASE_USD = 10.0
+AUTO_PROFIT_TAKE_THRESHOLD = 0.70
 FULLY_PRICED_EXIT_THRESHOLD = 0.999
 
 
@@ -326,7 +328,7 @@ class CopyTradingEngine:
             previous_local_positions = database.get_local_positions(self.db_path)
             trade_fetch_limit = max(1, min(int(settings["trade_fetch_limit"]), MAX_TRADE_FETCH_LIMIT))
             trades = self.client.fetch_trades(profile["wallet"], handle=profile["handle"], limit=trade_fetch_limit)
-            positions = self.client.fetch_positions(profile["wallet"], limit=100)
+            positions = self.client.fetch_positions(profile["wallet"], limit=SOURCE_POSITION_FETCH_LIMIT)
             leader_wallet_value = self._get_leader_wallet_value(settings, profile["wallet"], positions)
             bootstrap_copied = self._bootstrap_current_source_positions(
                 settings,
@@ -370,6 +372,10 @@ class CopyTradingEngine:
             failed += backlog_failed
             copied += bootstrap_copied
             database.refresh_local_position_market_values(self.db_path, freeze_recent_seconds=FRESH_FILL_MARK_GRACE_SECONDS, source_positions=positions)
+            auto_profit_takes = self._liquidate_positions_at_profit_target(settings, positions)
+            copied += auto_profit_takes
+            if auto_profit_takes:
+                database.refresh_local_position_market_values(self.db_path, source_positions=positions)
             auto_liquidated = self._liquidate_fully_priced_positions(settings, positions)
             copied += auto_liquidated
             if auto_liquidated:
@@ -681,6 +687,52 @@ class CopyTradingEngine:
             self.db_path,
         )
         return f"Auto-sold ${sold_amount:.2f} from profitable positions to restore 20% cash."
+
+    def _liquidate_positions_at_profit_target(self, settings: dict, source_positions: list[dict]) -> int:
+        positions = [
+            row
+            for row in database.list_local_positions_marked(
+                self.db_path,
+                freeze_recent_seconds=FRESH_FILL_MARK_GRACE_SECONDS,
+                source_positions=source_positions,
+            )
+            if float(row.get("shares") or 0.0) > 0
+            and float(row.get("market_value") or 0.0) >= MIN_BET_USD
+            and float(row.get("cost_basis") or 0.0) > 0
+            and float(row.get("unrealized_pnl") or 0.0) / float(row.get("cost_basis") or 1.0) >= AUTO_PROFIT_TAKE_THRESHOLD
+        ]
+        if not positions:
+            return 0
+
+        liquidated = 0
+        for position in positions:
+            market_value = round(float(position.get("market_value") or 0.0), 2)
+            if market_value < MIN_BET_USD:
+                continue
+            order = self.broker.execute_manual(
+                market_slug=position["market_slug"],
+                market_title=position.get("market_title"),
+                outcome=position["outcome"],
+                side="SELL",
+                price=float(position["current_price"]),
+                requested_amount_usd=market_value,
+                reason=f"Auto-sold after reaching {int(AUTO_PROFIT_TAKE_THRESHOLD * 100)}% profit.",
+                settings=settings,
+                db_path=self.db_path,
+            )
+            order["match_strategy"] = "auto-profit-take"
+            database.insert_copy_order(order, self.db_path)
+            liquidated += 1
+
+        if liquidated:
+            database.log(
+                "INFO",
+                "rebalance",
+                "Auto-sold paper positions after hitting the profit target.",
+                {"positions_liquidated": liquidated, "profit_target_pct": AUTO_PROFIT_TAKE_THRESHOLD},
+                self.db_path,
+            )
+        return liquidated
 
     def _liquidate_fully_priced_positions(self, settings: dict, source_positions: list[dict]) -> int:
         positions = [

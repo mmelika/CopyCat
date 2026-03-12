@@ -308,6 +308,25 @@ def trade_views():
     )
 
 
+def realized_performance_card():
+    return html.Div(
+        className="section-card",
+        children=[
+            html.Div(
+                className="section-header",
+                children=[
+                    html.Span("Realized Performance", className="section-title"),
+                    html.Span(id="realized-performance-badge", className="badge"),
+                ],
+            ),
+            html.Div(
+                id="realized-performance-panel",
+                className="realized-performance-panel",
+            ),
+        ],
+    )
+
+
 def portfolio_breakdown_card():
     return html.Div(
         className="portfolio-breakdown-card",
@@ -479,6 +498,7 @@ app.layout = html.Div(
                             className="dashboard-col",
                             children=[
                                 portfolio_breakdown_card(),
+                                realized_performance_card(),
                                 portfolio_curve_card(),
                                 section("Daily Performance", "daily-performance-table", "daily-performance-badge"),
                                 section("Sync History", "sync-history-table", "sync-history-badge"),
@@ -694,6 +714,8 @@ def refresh_portfolio_chart(_, range_key):
     Output("portfolio-holdings-allocation", "children"),
     Output("portfolio-top-holding", "children"),
     Output("portfolio-breakdown-list", "children"),
+    Output("realized-performance-badge", "children"),
+    Output("realized-performance-panel", "children"),
     Output("daily-performance-badge", "children"),
     Output("daily-performance-table", "children"),
     Output("sync-history-badge", "children"),
@@ -800,7 +822,15 @@ def refresh_dashboard(_, trade_tab):
     net_value = max(float(portfolio["net_value"]), 0.01)
     cash_pct = round((float(portfolio["cash_balance"]) / net_value) * 100, 1) if net_value else 0.0
     holdings_pct = round((float(portfolio["gross_exposure"]) / net_value) * 100, 1) if net_value else 0.0
-    open_positions = analytics["open_positions"][:8]
+    total_realized_pnl = round(sum(float(row.get("pnl") or 0.0) for row in analytics["closed_trades"]), 2)
+    total_closed_cost = round(sum(float(row.get("cost_basis") or 0.0) for row in analytics["closed_trades"]), 2)
+    win_count = sum(1 for row in analytics["closed_trades"] if float(row.get("pnl") or 0.0) > 0)
+    loss_count = sum(1 for row in analytics["closed_trades"] if float(row.get("pnl") or 0.0) < 0)
+    closed_trade_count = len(analytics["closed_trades"])
+    realized_win_rate = round((win_count / closed_trade_count) * 100, 1) if closed_trade_count else 0.0
+    realized_return_pct = round((total_realized_pnl / total_closed_cost) * 100, 2) if total_closed_cost else 0.0
+    all_open_positions = analytics["open_positions"]
+    open_positions = all_open_positions[:8]
     top_holding = analytics["open_positions"][0] if analytics["open_positions"] else None
     holdings_list = []
     holdings_list.append(
@@ -824,7 +854,9 @@ def refresh_dashboard(_, trade_tab):
             ],
         )
     )
+    shown_holdings_value = 0.0
     for row in open_positions:
+        shown_holdings_value += float(row["market_value"])
         allocation_pct = round((float(row["market_value"]) / net_value) * 100, 1) if net_value else 0.0
         holdings_list.append(
             html.Div(
@@ -851,8 +883,124 @@ def refresh_dashboard(_, trade_tab):
                 ],
             )
         )
+    hidden_holdings = max(len(all_open_positions) - len(open_positions), 0)
+    other_holdings_value = round(max(float(portfolio["gross_exposure"]) - shown_holdings_value, 0.0), 2)
+    other_holdings_pct = round((other_holdings_value / net_value) * 100, 1) if net_value else 0.0
+    if hidden_holdings and other_holdings_value > 0:
+        holdings_list.append(
+            html.Div(
+                className="portfolio-holding-row portfolio-holding-row-other",
+                children=[
+                    html.Div(
+                        className="portfolio-holding-main",
+                        children=[
+                            html.Div("Other Holdings", className="portfolio-holding-title"),
+                            html.Div(f"{hidden_holdings} smaller positions not shown individually", className="portfolio-holding-subtitle"),
+                        ],
+                    ),
+                    html.Div(
+                        className="portfolio-holding-stats",
+                        children=[
+                            html.Div(f"{other_holdings_pct:.1f}%", className="portfolio-holding-weight"),
+                            html.Div(fmt_currency(other_holdings_value), className="portfolio-holding-amount"),
+                        ],
+                    ),
+                ],
+            )
+        )
     if not analytics["open_positions"]:
         holdings_list.append(html.Div("No active holdings", className="portfolio-empty"))
+
+    realized_groups = {}
+    for row in analytics["closed_trades"]:
+        position_key = row["position_key"]
+        aggregate = realized_groups.setdefault(
+            position_key,
+            {
+                "market_slug": row["market_slug"],
+                "market_title": row["market_title"],
+                "outcome": row["outcome"],
+                "entry_time": row["entry_time"],
+                "exit_time": row["exit_time"],
+                "shares": 0.0,
+                "cost_basis": 0.0,
+                "proceeds": 0.0,
+                "pnl": 0.0,
+                "trades": 0,
+            },
+        )
+        aggregate["entry_time"] = min(aggregate["entry_time"], row["entry_time"]) if aggregate["entry_time"] else row["entry_time"]
+        aggregate["exit_time"] = max(aggregate["exit_time"], row["exit_time"]) if aggregate["exit_time"] else row["exit_time"]
+        aggregate["shares"] = round(float(aggregate["shares"]) + float(row["shares"]), 6)
+        aggregate["cost_basis"] = round(float(aggregate["cost_basis"]) + float(row["cost_basis"]), 2)
+        aggregate["proceeds"] = round(float(aggregate["proceeds"]) + float(row["proceeds"]), 2)
+        aggregate["pnl"] = round(float(aggregate["pnl"]) + float(row["pnl"]), 2)
+        aggregate["trades"] += 1
+    realized_summary_rows = sorted(realized_groups.values(), key=lambda row: row["exit_time"], reverse=True)
+    best_closed = max(realized_summary_rows, key=lambda row: float(row["pnl"]), default=None)
+    worst_closed = min(realized_summary_rows, key=lambda row: float(row["pnl"]), default=None)
+    realized_summary_table_rows = [
+        [
+            fmt_pacific_time(row["exit_time"]),
+            market_link(row["market_title"], row["market_slug"], 28),
+            row["outcome"],
+            str(row["trades"]),
+            fmt_currency(row["cost_basis"]),
+            fmt_currency(row["proceeds"]),
+            fmt_signed_currency(row["pnl"]),
+            f"{((float(row['pnl']) / float(row['cost_basis'])) * 100):+.1f}%" if float(row["cost_basis"]) else "-",
+        ]
+        for row in realized_summary_rows[:12]
+    ] or [["No closed positions yet", "-", "-", "-", "-", "-", "-", "-"]]
+    realized_performance_panel = html.Div(
+        className="realized-performance-panel",
+        children=[
+            html.Div(
+                className="realized-performance-summary",
+                children=[
+                    html.Div(
+                        className="realized-metric",
+                        children=[
+                            html.Div("Realized P/L", className="realized-metric-label"),
+                            html.Div(fmt_signed_currency(total_realized_pnl), className=f"realized-metric-value {signed_class(total_realized_pnl)}"),
+                            html.Div(f"{realized_return_pct:+.2f}% on {fmt_currency(total_closed_cost)} closed cost", className="realized-metric-sub"),
+                        ],
+                    ),
+                    html.Div(
+                        className="realized-metric",
+                        children=[
+                            html.Div("Win Rate", className="realized-metric-label"),
+                            html.Div(f"{realized_win_rate:.1f}%", className="realized-metric-value"),
+                            html.Div(f"{win_count} wins | {loss_count} losses", className="realized-metric-sub"),
+                        ],
+                    ),
+                    html.Div(
+                        className="realized-metric",
+                        children=[
+                            html.Div("Best Closed Position", className="realized-metric-label"),
+                            html.Div(fmt_signed_currency(best_closed["pnl"]) if best_closed else "-", className=f"realized-metric-value {signed_class(best_closed['pnl']) if best_closed else 'text-muted'}"),
+                            html.Div(short_text(best_closed["market_title"], 28) if best_closed else "No closed positions yet", className="realized-metric-sub"),
+                        ],
+                    ),
+                    html.Div(
+                        className="realized-metric",
+                        children=[
+                            html.Div("Worst Closed Position", className="realized-metric-label"),
+                            html.Div(fmt_signed_currency(worst_closed["pnl"]) if worst_closed else "-", className=f"realized-metric-value {signed_class(worst_closed['pnl']) if worst_closed else 'text-muted'}"),
+                            html.Div(short_text(worst_closed["market_title"], 28) if worst_closed else "No closed positions yet", className="realized-metric-sub"),
+                        ],
+                    ),
+                ],
+            ),
+            html.Div(
+                className="realized-performance-table",
+                children=render_table(
+                    ["Closed At (PT)", "Market", "Outcome", "Fills", "Cost", "Proceeds", "Realized P/L", "Return"],
+                    realized_summary_table_rows,
+                ),
+            ),
+        ],
+    )
     sync_rows = [
         [
             fmt_pacific_time(row["started_at"]),
@@ -968,6 +1116,8 @@ def refresh_dashboard(_, trade_tab):
         f"{holdings_pct:.1f}% | {fmt_currency(portfolio['gross_exposure'])}",
         f"{short_text(top_holding['market_title'], 24)} | {fmt_currency(top_holding['market_value'])}" if top_holding else "No holdings yet",
         holdings_list,
+        str(len(realized_summary_rows)),
+        realized_performance_panel,
         str(len(daily_performance)),
         render_table(["Date", "Day Change", "Closed P/L", "Portfolio"], daily_rows),
         str(len(sync_runs)),
