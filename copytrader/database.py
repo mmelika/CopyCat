@@ -592,24 +592,39 @@ def list_shadow_orders(limit: int = 100, db_path: Path | str = DB_PATH) -> list[
             "SELECT * FROM shadow_orders ORDER BY datetime(created_at) DESC LIMIT ?",
             (limit,),
         ).fetchall()
-    return [dict(row) for row in rows]
+    items = []
+    for row in rows:
+        item = dict(row)
+        try:
+            payload = json.loads(item.get("raw_json") or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            payload = {}
+        if isinstance(payload, dict):
+            item.update(payload)
+        items.append(item)
+    return items
 
 
 def shadow_order_summary(db_path: Path | str = DB_PATH) -> dict:
-    with connect(db_path) as conn:
-        row = conn.execute(
-            """
-            SELECT
-                COUNT(*) AS total,
-                AVG(ABS(price_delta_bps)) AS avg_abs_price_delta_bps,
-                MAX(ABS(price_delta_bps)) AS max_abs_price_delta_bps
-            FROM shadow_orders
-            """
-        ).fetchone()
+    orders = list_shadow_orders(10000, db_path)
+    if not orders:
+        return {
+            "total": 0,
+            "avg_abs_price_delta_bps": 0.0,
+            "max_abs_price_delta_bps": 0.0,
+            "avg_abs_price_delta_cents": 0.0,
+            "total_execution_drag_usd": 0.0,
+        }
+    total = len(orders)
+    abs_bps = [abs(float(row.get("price_delta_bps") or 0.0)) for row in orders]
+    abs_cents = [abs(float(row.get("price_delta_cents") or 0.0)) for row in orders]
+    total_drag = round(sum(float(row.get("execution_drag_usd") or 0.0) for row in orders), 4)
     return {
-        "total": int(row["total"] or 0),
-        "avg_abs_price_delta_bps": round(float(row["avg_abs_price_delta_bps"] or 0.0), 2),
-        "max_abs_price_delta_bps": round(float(row["max_abs_price_delta_bps"] or 0.0), 2),
+        "total": total,
+        "avg_abs_price_delta_bps": round(sum(abs_bps) / total, 2),
+        "max_abs_price_delta_bps": round(max(abs_bps), 2),
+        "avg_abs_price_delta_cents": round(sum(abs_cents) / total, 3),
+        "total_execution_drag_usd": total_drag,
     }
 
 
