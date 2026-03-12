@@ -50,6 +50,13 @@ bash deploy/bootstrap_ec2.sh
 
 If you want me to do the EC2 deployment directly, I need the instance IP or DNS name, the SSH username, and a usable SSH key path or access method.
 
+GitHub push deploys:
+
+- `.github/workflows/deploy.yml` runs on every push to `main`.
+- It SSHes to the server, runs `deploy/deploy_on_ec2.sh`, and restarts both the web and engine services.
+- Required GitHub secrets: `EC2_HOST`, `EC2_USER`, `EC2_SSH_KEY`, `EC2_APP_DIR`.
+- Optional GitHub secrets for non-default service names: `WEB_SERVICE_NAME`, `ENGINE_SERVICE_NAME`.
+
 ## Operations
 
 Health check:

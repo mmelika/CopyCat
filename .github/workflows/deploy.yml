@@ -19,21 +19,14 @@ jobs:
           script: |
             export APP_DIR="${{ secrets.EC2_APP_DIR }}"
             export BRANCH="main"
-            cd "${APP_DIR:-/home/ec2-user/CopyCat}"
-            git fetch origin "$BRANCH"
-            git reset --hard "origin/$BRANCH"
-            if [ ! -d ".venv" ]; then
-              python3 -m venv .venv
-            fi
-            . .venv/bin/activate
-            pip install --upgrade pip
-            pip install -r requirements.txt
-            sudo systemctl stop copycat copycat-engine || true
-            pkill -9 -f gunicorn || true
+            export WEB_SERVICE_NAME="${{ secrets.WEB_SERVICE_NAME }}"
+            export ENGINE_SERVICE_NAME="${{ secrets.ENGINE_SERVICE_NAME }}"
+            export APP_DIR="${APP_DIR:-/home/ec2-user/CopyCat}"
+            export WEB_SERVICE_NAME="${WEB_SERVICE_NAME:-copycat-web}"
+            export ENGINE_SERVICE_NAME="${ENGINE_SERVICE_NAME:-copycat-engine}"
+            cd "$APP_DIR"
+            bash deploy/deploy_on_ec2.sh
             sleep 2
-            sudo systemctl start copycat copycat-engine
-            sudo systemctl restart copycat-engine
-            sleep 2
-            sudo systemctl is-active --quiet copycat
-            sudo systemctl is-active --quiet copycat-engine
+            sudo systemctl is-active --quiet "$WEB_SERVICE_NAME"
+            sudo systemctl is-active --quiet "$ENGINE_SERVICE_NAME"
             curl -fsS http://127.0.0.1:8060/healthz > /tmp/copycat-health.json

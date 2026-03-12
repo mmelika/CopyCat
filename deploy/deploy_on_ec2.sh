@@ -24,7 +24,20 @@ fi
 pip install --upgrade pip
 pip install -r requirements.txt
 
-sudo systemctl restart "$WEB_SERVICE_NAME" "$ENGINE_SERVICE_NAME"
+sudo systemctl daemon-reload
+
+if sudo systemctl is-active --quiet "$WEB_SERVICE_NAME"; then
+  sudo systemctl restart "$WEB_SERVICE_NAME"
+else
+  sudo systemctl start "$WEB_SERVICE_NAME"
+fi
+
+if sudo systemctl is-active --quiet "$ENGINE_SERVICE_NAME"; then
+  sudo systemctl restart "$ENGINE_SERVICE_NAME"
+else
+  sudo systemctl start "$ENGINE_SERVICE_NAME"
+fi
+
 sudo systemctl is-active --quiet "$WEB_SERVICE_NAME"
 sudo systemctl is-active --quiet "$ENGINE_SERVICE_NAME"
 
