@@ -944,8 +944,6 @@ def _price_maps_from_positions(source_positions: list[dict]) -> tuple[dict[tuple
             price = 0.0
         key = (row.get("market_slug") or "", row.get("outcome") or "")
         price_map[key] = price
-        if price <= 0:
-            continue
         for alias in _position_aliases(row):
             alias_price_map[alias] = price
     return price_map, alias_price_map
@@ -981,13 +979,13 @@ def fetch_live_market_prices(records: list[dict], db_path: Path | str = DB_PATH)
 
 def _resolve_mark_price(record: dict, price_map: dict[tuple[str, str], float], alias_price_map: dict[str, float], fallback_price: float) -> float:
     current_price = price_map.get((record.get("market_slug") or "", record.get("outcome") or ""))
-    if current_price is None or current_price <= 0:
+    if current_price is None:
         for alias in _position_aliases(record):
             aliased_price = alias_price_map.get(alias)
-            if aliased_price and aliased_price > 0:
+            if aliased_price is not None:
                 current_price = aliased_price
                 break
-    if current_price is None or current_price <= 0:
+    if current_price is None:
         current_price = fallback_price
     return float(current_price or 0.0)
 
