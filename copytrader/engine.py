@@ -261,6 +261,53 @@ class PaperBroker:
 
 
 class ShadowBroker:
+    def __init__(self, client: PolymarketClient):
+        self.client = client
+
+    def _resolve_market_context(self, source_trade: dict) -> tuple[str, dict]:
+        token_id = (source_trade.get("token_id") or "").strip()
+        market_context = {}
+        if source_trade.get("market_slug"):
+            market_context = self.client.fetch_market_metadata(source_trade.get("market_slug") or "")
+        if not token_id:
+            market_prices = self.client.fetch_market_prices([source_trade])
+            match = next(
+                (
+                    row for row in market_prices
+                    if (row.get("market_slug") or "") == (source_trade.get("market_slug") or "")
+                    and (row.get("outcome") or "") == (source_trade.get("outcome") or "")
+                ),
+                None,
+            )
+            if match:
+                token_id = (match.get("token_id") or "").strip()
+                if not market_context:
+                    market_context = {
+                        "market_slug": match.get("market_slug") or "",
+                        "category": match.get("category") or "",
+                        "market_type": match.get("market_type") or "",
+                        "sports_market_type": match.get("sports_market_type") or "",
+                        "fees_enabled": bool(match.get("fees_enabled", False)),
+                    }
+        return token_id, market_context
+
+    def _fee_exponent(self, market_context: dict) -> int:
+        category = (market_context.get("category") or "").strip().lower()
+        market_type = (market_context.get("market_type") or "").strip().lower()
+        sports_market_type = (market_context.get("sports_market_type") or "").strip().lower()
+        if "crypto" in category or "crypto" in market_type:
+            return 2
+        if sports_market_type:
+            return 1
+        return 0
+
+    def _estimate_fee_usd(self, gross_notional_usd: float, live_price: float, fee_rate_bps: float, exponent: int) -> float:
+        if gross_notional_usd <= 0 or live_price <= 0 or fee_rate_bps <= 0 or exponent <= 0:
+            return 0.0
+        fee_rate = fee_rate_bps / 10000.0
+        price_term = live_price * (1 - live_price)
+        return round(gross_notional_usd * fee_rate * (price_term**exponent), 6)
+
     def preview(self, source_trade: dict, requested_amount_usd: float, settings: dict) -> dict:
         side = source_trade["side"]
         source_price = max(float(source_trade.get("price") or 0.0), 0.01)
@@ -271,7 +318,26 @@ class ShadowBroker:
         paper_price = round(_clamp(paper_price, 0.01, 0.99), 4)
         live_price = round(_clamp(live_price, 0.01, 0.99), 4)
         estimated_live_shares = round(requested_amount_usd / live_price, 6) if live_price > 0 else 0.0
+        token_id, market_context = self._resolve_market_context(source_trade)
+        fees_enabled = bool(market_context.get("fees_enabled", False))
+        fee_rate_bps = self.client.fetch_fee_rate_bps(token_id) if fees_enabled and token_id else 0.0
+        fee_exponent = self._fee_exponent(market_context)
+        fee_usd = self._estimate_fee_usd(requested_amount_usd, live_price, fee_rate_bps, fee_exponent) if fees_enabled else 0.0
+        effective_live_price = live_price
+        net_live_shares = estimated_live_shares
+        if fee_usd > 0 and estimated_live_shares > 0:
+            if side == "BUY":
+                fee_shares = fee_usd / live_price if live_price > 0 else 0.0
+                net_live_shares = max(estimated_live_shares - fee_shares, 0.0)
+                if net_live_shares > 0:
+                    effective_live_price = round(requested_amount_usd / net_live_shares, 4)
+            else:
+                net_proceeds = max(requested_amount_usd - fee_usd, 0.0)
+                effective_live_price = round(net_proceeds / estimated_live_shares, 4) if estimated_live_shares > 0 else live_price
+        effective_live_price = round(_clamp(effective_live_price, 0.01, 0.99), 4)
         price_delta_bps = ((live_price - paper_price) / paper_price) * 10000 if paper_price > 0 else 0.0
+        if fee_usd > 0 and effective_live_price > 0:
+            price_delta_bps = ((effective_live_price - paper_price) / paper_price) * 10000 if paper_price > 0 else 0.0
         if side == "SELL":
             price_delta_bps *= -1
         return {
@@ -284,14 +350,18 @@ class ShadowBroker:
             "requested_amount_usd": round(requested_amount_usd, 2),
             "reference_price": round(source_price, 4),
             "paper_price": paper_price,
-            "estimated_live_price": live_price,
-            "estimated_live_shares": estimated_live_shares,
+            "estimated_live_price": effective_live_price,
+            "estimated_live_shares": round(net_live_shares, 6),
             "price_delta_bps": round(price_delta_bps, 2),
             "status": "SHADOW",
             "created_at": database.utc_now(),
             "position_key": source_trade.get("position_key", ""),
             "match_strategy": source_trade.get("match_strategy", ""),
             "extra_slippage_bps": float(settings.get("shadow_extra_slippage_bps") or 0.0),
+            "token_id": token_id,
+            "fees_enabled": fees_enabled,
+            "fee_rate_bps": fee_rate_bps,
+            "estimated_fee_usd": round(fee_usd, 6),
         }
 
 
@@ -300,7 +370,7 @@ class CopyTradingEngine:
         self.db_path = db_path
         self.client = PolymarketClient()
         self.broker = PaperBroker()
-        self.shadow_broker = ShadowBroker()
+        self.shadow_broker = ShadowBroker(self.client)
         self._stop_event = threading.Event()
         self._thread = None
         self._lock = threading.Lock()

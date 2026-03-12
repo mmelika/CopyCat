@@ -221,9 +221,49 @@ class PolymarketClient:
                             "price": _to_float(outcome_prices[index], 0.0),
                             "condition_id": condition_id,
                             "token_id": token_id,
+                            "category": item.get("category") or "",
+                            "market_type": item.get("marketType") or "",
+                            "sports_market_type": item.get("sportsMarketType") or "",
+                            "fees_enabled": bool(item.get("feesEnabled", False)),
                         }
                     )
         return prices
+
+    def fetch_market_metadata(self, slug: str) -> dict:
+        clean_slug = (slug or "").strip()
+        if not clean_slug:
+            return {}
+        try:
+            payload = self._get_json("https://gamma-api.polymarket.com/markets", params={"slug": clean_slug})
+        except Exception:
+            return {}
+        items = payload if isinstance(payload, list) else []
+        if not items:
+            return {}
+        item = items[0] if isinstance(items[0], dict) else {}
+        if not item:
+            return {}
+        return {
+            "market_slug": item.get("slug") or clean_slug,
+            "category": (item.get("category") or "").strip(),
+            "market_type": (item.get("marketType") or "").strip(),
+            "sports_market_type": (item.get("sportsMarketType") or "").strip(),
+            "fees_enabled": bool(item.get("feesEnabled", False)),
+            "maker_base_fee": _to_float(item.get("makerBaseFee"), 0.0),
+            "taker_base_fee": _to_float(item.get("takerBaseFee"), 0.0),
+        }
+
+    def fetch_fee_rate_bps(self, token_id: str) -> float:
+        clean_token_id = _clean_id(token_id)
+        if not clean_token_id:
+            return 0.0
+        try:
+            payload = self._get_json("https://clob.polymarket.com/fee-rate", params={"token_id": clean_token_id})
+        except Exception:
+            return 0.0
+        if not isinstance(payload, dict):
+            return 0.0
+        return _to_float(payload.get("fee_rate_bps"), 0.0)
 
     def fetch_order_book(self, token_id: str) -> dict:
         clean_token_id = _clean_id(token_id)
