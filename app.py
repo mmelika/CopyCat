@@ -210,6 +210,7 @@ def topbar():
                         ],
                     ),
                     html.Span(id="status-pill", className="status-running", children="RUNNING"),
+                    html.Span(id="execution-pill", className="mode-pill mode-paper", children="PAPER MODE"),
                 ],
             ),
             html.Div(
@@ -250,6 +251,7 @@ def market_strip():
                 className="market-strip-grid",
                 children=[
                     item("Heartbeat", "market-heartbeat"),
+                    item("Execution", "market-execution"),
                     item("Sync Cadence", "market-cadence"),
                     item("Exposure Cap", "market-exposure"),
                     item("Leader NAV", "market-leader-nav"),
@@ -370,13 +372,43 @@ def portfolio_breakdown_card():
 
 
 def settings_modal():
-    field = lambda label, field_id, placeholder, value=None: html.Div(
-        className="settings-field",
-        children=[
-            html.Div(label, className="settings-label"),
-            dcc.Input(id=field_id, className="settings-input", value=value, placeholder=placeholder, debounce=False),
-        ],
-    )
+    def text_field(label, field_id, placeholder, help_text=""):
+        return html.Div(
+            className="settings-field",
+            children=[
+                html.Div(label, className="settings-label"),
+                dcc.Input(id=field_id, className="settings-input", placeholder=placeholder, debounce=False, type="text"),
+                html.Div(help_text, className="settings-help") if help_text else None,
+            ],
+        )
+
+    def number_field(label, field_id, placeholder, help_text="", min_value=None, step=None):
+        return html.Div(
+            className="settings-field",
+            children=[
+                html.Div(label, className="settings-label"),
+                dcc.Input(
+                    id=field_id,
+                    className="settings-input",
+                    placeholder=placeholder,
+                    debounce=False,
+                    type="number",
+                    min=min_value,
+                    step=step,
+                ),
+                html.Div(help_text, className="settings-help") if help_text else None,
+            ],
+        )
+
+    def select_field(label, field_id, options, help_text=""):
+        return html.Div(
+            className="settings-field",
+            children=[
+                html.Div(label, className="settings-label"),
+                dcc.Dropdown(id=field_id, className="settings-select", clearable=False, searchable=False, options=options),
+                html.Div(help_text, className="settings-help") if help_text else None,
+            ],
+        )
     return html.Div(
         id="settings-modal",
         className="modal-overlay hidden",
@@ -398,40 +430,56 @@ def settings_modal():
                             html.Div(
                                 className="modal-row modal-row-3",
                                 children=[
-                                    field("Target Handle", "settings-target-handle", "@GamblingIsAllYouNeed"),
-                                    field("Target Wallet (optional)", "settings-target-wallet", "0x..."),
-                                    field("Reference Wallet", "settings-leader-wallet", "0xBEbe..."),
+                                    text_field("Target Handle", "settings-target-handle", "@GamblingIsAllYouNeed", "Polymarket username to mirror when wallet is not set."),
+                                    text_field("Target Wallet (optional)", "settings-target-wallet", "0x...", "Direct wallet override for the account you want to follow."),
+                                    text_field("Reference Wallet", "settings-leader-wallet", "0xBEbe...", "Wallet used to estimate leader account size for proportional copy sizing."),
                                 ],
                             ),
                             html.Div("Execution", className="modal-section-label"),
                             html.Div(
                                 className="modal-row modal-row-2",
                                 children=[
-                                    field("Execution Mode", "settings-execution-mode", "paper or shadow"),
-                                    field("Shadow Extra Slippage Bps", "settings-shadow-extra-slippage-bps", "15"),
+                                    select_field(
+                                        "Execution Mode",
+                                        "settings-execution-mode",
+                                        [
+                                            {"label": "Paper only", "value": "paper"},
+                                            {"label": "Shadow live estimate", "value": "shadow"},
+                                        ],
+                                        "Paper keeps current behavior. Shadow also logs estimated live fills without placing orders.",
+                                    ),
+                                    number_field("Shadow Extra Slippage Bps", "settings-shadow-extra-slippage-bps", "15", "Additional simulated slippage applied only to shadow live estimates.", min_value=0, step=1),
                                 ],
                             ),
                             html.Div(
                                 className="modal-row modal-row-2",
                                 children=[
-                                    field("Paper Starting Balance", "settings-start-balance", "5000"),
-                                    field("Paper Cash Balance", "settings-cash-balance", "5000"),
+                                    number_field("Paper Starting Balance", "settings-start-balance", "5000", "Baseline used for total return and fresh-start resets.", min_value=0, step=0.01),
+                                    number_field("Paper Cash Balance", "settings-cash-balance", "5000", "Current deployable cash in the paper portfolio.", min_value=0, step=0.01),
                                 ],
                             ),
                             html.Div(
                                 className="modal-row modal-row-2",
                                 children=[
-                                    field("Max Total Exposure USD", "settings-max-exposure", "2500"),
-                                    field("Slippage Bps", "settings-slippage-bps", "30"),
+                                    number_field("Max Total Exposure USD", "settings-max-exposure", "2500", "Hard cap on marked paper exposure before dynamic step-ups.", min_value=0, step=0.01),
+                                    number_field("Paper Slippage Bps", "settings-slippage-bps", "30", "Execution slippage applied to simulated paper fills.", min_value=0, step=1),
                                 ],
                             ),
                             html.Div("Sync", className="modal-section-label"),
                             html.Div(
                                 className="modal-row modal-row-3",
                                 children=[
-                                    field("Sync Interval ms", "settings-sync-interval", "1200"),
-                                    field("Trade Fetch Limit", "settings-trade-limit", "100"),
-                                    field("Copy Sells (1/0)", "settings-copy-sells", "1"),
+                                    number_field("Sync Interval ms", "settings-sync-interval", "1200", "Polling interval for target trades and position refreshes.", min_value=500, step=100),
+                                    number_field("Trade Fetch Limit", "settings-trade-limit", "10", "Recent source trades inspected on each sync cycle. Max 10.", min_value=1, step=1),
+                                    select_field(
+                                        "Copy Sell Behavior",
+                                        "settings-copy-sells",
+                                        [
+                                            {"label": "Copy sells", "value": 1},
+                                            {"label": "Ignore sells", "value": 0},
+                                        ],
+                                        "Whether sell events from the followed account should reduce local positions.",
+                                    ),
                                 ],
                             ),
                         ],
@@ -697,12 +745,15 @@ def refresh_portfolio_chart(_, range_key):
 @app.callback(
     Output("status-pill", "children"),
     Output("status-pill", "className"),
+    Output("execution-pill", "children"),
+    Output("execution-pill", "className"),
     Output("toggle-engine-btn", "children"),
     Output("refresh-text", "children"),
     Output("clock", "children"),
     Output("market-lead", "children"),
     Output("market-lead-sub", "children"),
     Output("market-heartbeat", "children"),
+    Output("market-execution", "children"),
     Output("market-cadence", "children"),
     Output("market-exposure", "children"),
     Output("market-leader-nav", "children"),
@@ -1034,6 +1085,13 @@ def refresh_dashboard(_, trade_tab):
     target_wallet = app_state.get("resolved_target_wallet") or settings["target_wallet"] or "Not resolved yet"
     execution_mode = (settings.get("execution_mode") or "paper").strip().lower()
     shadow_mode_active = execution_mode == "shadow"
+    execution_pill_text = "SHADOW MODE" if shadow_mode_active else "PAPER MODE"
+    execution_pill_class = "mode-pill mode-shadow" if shadow_mode_active else "mode-pill mode-paper"
+    market_execution = (
+        f"Shadow +{int(settings.get('shadow_extra_slippage_bps') or 0)}bps"
+        if shadow_mode_active
+        else "Paper simulation"
+    )
     analysis = html.Div(
         className="analysis-stack",
         children=[
@@ -1130,12 +1188,15 @@ def refresh_dashboard(_, trade_tab):
     return (
         heartbeat_label(app_state, runtime_status, stale_age_seconds),
         runtime_class,
+        execution_pill_text,
+        execution_pill_class,
         "Pause" if app_state["engine_status"] == "RUNNING" else "Resume",
         refresh_text,
         fmt_pacific_clock(),
         target_label,
         target_wallet,
         heartbeat_label(app_state, runtime_status, stale_age_seconds),
+        market_execution,
         f"{settings['sync_interval_ms']} ms",
         fmt_currency(effective_exposure_cap),
         fmt_currency(float(app_state.get("leader_wallet_value") or 0.0)),

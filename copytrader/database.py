@@ -893,6 +893,10 @@ def refresh_local_position_market_values(db_path: Path | str = DB_PATH, freeze_r
 
 def trade_analytics(db_path: Path | str = DB_PATH, source_positions: list[dict] | None = None) -> dict:
     orders = list_all_copy_orders(db_path)
+    local_positions_by_key = {
+        row["position_key"]: row
+        for row in get_local_positions(db_path)
+    }
     open_lots: list[dict] = []
     closed_trades: list[dict] = []
     daily_realized: dict[str, float] = {}
@@ -997,6 +1001,7 @@ def trade_analytics(db_path: Path | str = DB_PATH, source_positions: list[dict] 
 
     aggregated_open_positions: dict[str, dict] = {}
     for row in open_lots:
+        local_position = local_positions_by_key.get(row["position_key"])
         aggregate = aggregated_open_positions.setdefault(
             row["position_key"],
             {
@@ -1010,10 +1015,10 @@ def trade_analytics(db_path: Path | str = DB_PATH, source_positions: list[dict] 
                 "cost_basis": 0.0,
                 "market_value": 0.0,
                 "unrealized_pnl": 0.0,
-                "realized_pnl": 0.0,
+                "realized_pnl": float(local_position.get("realized_pnl") or 0.0) if local_position else 0.0,
                 "side": "BUY",
-                "updated_at": row["entry_time"],
-                "avg_price": 0.0,
+                "updated_at": (local_position.get("updated_at") or row["entry_time"]) if local_position else row["entry_time"],
+                "avg_price": float(local_position.get("avg_price") or 0.0) if local_position else 0.0,
             },
         )
         aggregate["shares"] = round(float(aggregate["shares"]) + float(row["shares"]), 6)
@@ -1021,17 +1026,21 @@ def trade_analytics(db_path: Path | str = DB_PATH, source_positions: list[dict] 
         aggregate["market_value"] = round(float(aggregate["market_value"]) + float(row["market_value"]), 2)
         aggregate["unrealized_pnl"] = round(float(aggregate["unrealized_pnl"]) + float(row["unrealized_pnl"]), 2)
         aggregate["entry_time"] = min(aggregate["entry_time"], row["entry_time"]) if aggregate["entry_time"] else row["entry_time"]
-        aggregate["updated_at"] = max(aggregate["updated_at"], row["entry_time"]) if aggregate["updated_at"] else row["entry_time"]
         aggregate["current_price"] = row["current_price"]
     for aggregate in aggregated_open_positions.values():
+        local_position = local_positions_by_key.get(aggregate["position_key"])
         shares = float(aggregate["shares"] or 0.0)
         aggregate["avg_price"] = round((float(aggregate["cost_basis"]) / shares), 4) if shares > 0 else 0.0
+        if local_position:
+            aggregate["updated_at"] = local_position.get("updated_at") or aggregate["updated_at"]
+            aggregate["realized_pnl"] = round(float(local_position.get("realized_pnl") or aggregate["realized_pnl"]), 2)
 
     realized_by_key: dict[str, float] = {}
     for row in closed_trades:
         realized_by_key[row["position_key"]] = round(realized_by_key.get(row["position_key"], 0.0) + float(row["pnl"]), 2)
     for position_key, aggregate in aggregated_open_positions.items():
-        aggregate["realized_pnl"] = realized_by_key.get(position_key, 0.0)
+        if position_key not in local_positions_by_key:
+            aggregate["realized_pnl"] = realized_by_key.get(position_key, 0.0)
 
     open_lots.sort(key=lambda row: row["entry_time"], reverse=True)
     closed_trades.sort(key=lambda row: row["exit_time"], reverse=True)

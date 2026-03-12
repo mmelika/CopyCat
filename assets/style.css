@@ -107,6 +107,7 @@ input {
 
 .status-running,
 .status-stopped,
+.mode-pill,
 .badge,
 .btn-outline,
 .btn-accent,
@@ -125,6 +126,30 @@ input {
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.14em;
+}
+
+.mode-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 7px 12px;
+  border: 1px solid transparent;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.mode-paper {
+  color: #d8ecff;
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(154, 188, 220, 0.16);
+}
+
+.mode-shadow {
+  color: #0f1a12;
+  background: linear-gradient(180deg, rgba(255, 191, 71, 0.96), rgba(255, 163, 71, 0.92));
+  border-color: rgba(255, 191, 71, 0.36);
+  box-shadow: 0 0 0 6px rgba(255, 191, 71, 0.10);
 }
 
 .status-running {
@@ -243,7 +268,7 @@ input {
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 14px;
 }
 
@@ -877,9 +902,12 @@ tbody td {
   margin-bottom: 8px;
   color: var(--muted);
   font-size: 12px;
+  font-weight: 700;
 }
 
-.settings-input {
+.settings-input,
+.settings-select .Select-control,
+.settings-select .select__control {
   width: 100%;
   padding: 12px 13px;
   border-radius: 14px;
@@ -892,6 +920,41 @@ tbody td {
   outline: none;
   border-color: rgba(57, 167, 255, 0.34);
   box-shadow: 0 0 0 3px rgba(57, 167, 255, 0.10);
+}
+
+.settings-select .Select-control,
+.settings-select .select__control {
+  min-height: 48px;
+  padding: 4px 8px;
+}
+
+.settings-select .Select-menu-outer,
+.settings-select .select__menu {
+  background: #0d1825;
+  border: 1px solid rgba(154, 188, 220, 0.14);
+  border-radius: 14px;
+}
+
+.settings-select .Select-value-label,
+.settings-select .Select-placeholder,
+.settings-select .Select-input > input,
+.settings-select .VirtualizedSelectOption,
+.settings-select .select__single-value,
+.settings-select .select__placeholder,
+.settings-select .select__option {
+  color: var(--text) !important;
+}
+
+.settings-select .Select-arrow,
+.settings-select .select__indicator {
+  color: var(--muted);
+}
+
+.settings-help {
+  margin-top: 7px;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 @media (max-width: 1180px) {
