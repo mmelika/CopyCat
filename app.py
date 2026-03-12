@@ -448,7 +448,7 @@ def settings_modal():
                                         ],
                                         "Paper keeps current behavior. Shadow also logs estimated live fills without placing orders.",
                                     ),
-                                    number_field("Shadow Extra Slippage Bps", "settings-shadow-extra-slippage-bps", "15", "Additional simulated slippage applied only to shadow live estimates.", min_value=0, step=1),
+                                    number_field("Fallback Slippage Bps", "settings-shadow-extra-slippage-bps", "15", "Only used if live order book data is unavailable for a shadow estimate.", min_value=0, step=1),
                                 ],
                             ),
                             html.Div(
@@ -1157,7 +1157,7 @@ def refresh_dashboard(_, trade_tab, view_key):
     execution_pill_text = "SHADOW MODE" if shadow_mode_active else "PAPER MODE"
     execution_pill_class = "mode-pill mode-shadow" if shadow_mode_active else "mode-pill mode-paper"
     market_execution = (
-        f"Shadow +{int(settings.get('shadow_extra_slippage_bps') or 0)}bps"
+        "Shadow order book"
         if shadow_mode_active
         else "Paper simulation"
     )

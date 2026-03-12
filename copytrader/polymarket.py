@@ -78,6 +78,11 @@ class PolymarketClient:
         response.raise_for_status()
         return response.json()
 
+    def post_json(self, url: str, payload: Any):
+        response = self.session.post(url, json=payload, timeout=API_TIMEOUT_SECONDS)
+        response.raise_for_status()
+        return response.json()
+
     def resolve_target_wallet(self, handle_or_wallet: str) -> dict:
         clean = (handle_or_wallet or "").strip().lstrip("@")
         if not clean:
@@ -219,6 +224,36 @@ class PolymarketClient:
                         }
                     )
         return prices
+
+    def fetch_order_book(self, token_id: str) -> dict:
+        clean_token_id = _clean_id(token_id)
+        if not clean_token_id:
+            return {}
+        try:
+            payload = self._get_json("https://clob.polymarket.com/book", params={"token_id": clean_token_id})
+        except Exception:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def fetch_order_books(self, token_ids: list[str]) -> dict[str, dict]:
+        clean_token_ids = [_clean_id(token_id) for token_id in token_ids if _clean_id(token_id)]
+        if not clean_token_ids:
+            return {}
+        try:
+            payload = self.post_json(
+                "https://clob.polymarket.com/books",
+                [{"token_id": token_id} for token_id in clean_token_ids],
+            )
+        except Exception:
+            return {}
+        books = {}
+        for item in payload if isinstance(payload, list) else []:
+            if not isinstance(item, dict):
+                continue
+            asset_id = _clean_id(item.get("asset_id") or item.get("token_id"))
+            if asset_id:
+                books[asset_id] = item
+        return books
 
     def _normalize_trades(self, payload: Any, *, wallet: str, handle: str) -> list[dict]:
         items = payload if isinstance(payload, list) else payload.get("data") or payload.get("items") or payload.get("history") or []
