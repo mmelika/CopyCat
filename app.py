@@ -1135,17 +1135,33 @@ def refresh_dashboard(_, trade_tab):
         if shadow_has_history
         else ("Waiting for shadow fills" if shadow_mode_active else "Turn on shadow mode in Settings")
     )
-    shadow_fill_rows = [
-        [
-            fmt_pacific_time(row["created_at"]),
-            short_text(row["market_title"], 20),
-            row["side"],
-            fmt_number(row["paper_price"], 3),
-            fmt_number(row["estimated_live_price"], 3),
-            f"{float(row['price_delta_bps']):+.1f}bps",
-        ]
-        for row in shadow_orders[:6]
-    ] or [["No shadow fills yet", "-", "-", "-", "-", "-"]]
+    paper_positions_by_key = {row["position_key"]: row for row in analytics["open_positions"]}
+    shadow_positions_by_key = {row["position_key"]: row for row in shadow_analytics["open_positions"]}
+    compare_position_keys = list(dict.fromkeys([
+        *[row["position_key"] for row in analytics["open_positions"]],
+        *[row["position_key"] for row in shadow_analytics["open_positions"]],
+    ]))
+    compare_position_rows = []
+    for position_key in compare_position_keys[:12]:
+        paper_row = paper_positions_by_key.get(position_key, {})
+        shadow_row = shadow_positions_by_key.get(position_key, {})
+        market_row = paper_row or shadow_row
+        paper_entry = float(paper_row.get("avg_price") or 0.0)
+        shadow_entry = float(shadow_row.get("avg_price") or 0.0)
+        entry_gap_cents = ((shadow_entry - paper_entry) * 100) if paper_entry and shadow_entry else 0.0
+        compare_position_rows.append(
+            [
+                market_link(market_row.get("market_title"), market_row.get("market_slug"), 24),
+                market_row.get("outcome") or "-",
+                fmt_number(paper_entry, 3) if paper_entry else "-",
+                fmt_number(shadow_entry, 3) if shadow_entry else "-",
+                fmt_number(paper_row.get("shares"), 2) if paper_row.get("shares") else "-",
+                fmt_number(shadow_row.get("shares"), 2) if shadow_row.get("shares") else "-",
+                fmt_number((paper_row.get("current_price") or shadow_row.get("current_price") or 0.0), 3),
+                f"{entry_gap_cents:+.2f}c" if paper_entry and shadow_entry else "-",
+            ]
+        )
+    compare_position_rows = compare_position_rows or [["No open positions to compare", "-", "-", "-", "-", "-", "-", "-"]]
     compare_panel = html.Div(
         className="compare-stack",
         children=[
@@ -1171,22 +1187,22 @@ def refresh_dashboard(_, trade_tab):
                     html.Div(
                         className="compare-metric",
                         children=[
-                            html.Div("Shadow Delta", className="realized-metric-label"),
+                            html.Div("Current Portfolio Gap", className="realized-metric-label"),
                             html.Div(shadow_delta_text, className=f"realized-metric-value {shadow_tone}"),
-                            html.Div("Shadow net minus paper net", className="realized-metric-sub"),
+                            html.Div("Current shadow net minus current paper net", className="realized-metric-sub"),
                         ],
                     ),
                     html.Div(
                         className="compare-metric",
                         children=[
-                            html.Div("Avg Fill Drift", className="realized-metric-label"),
+                            html.Div("Avg Entry Drift", className="realized-metric-label"),
                             html.Div(
                                 f"{shadow_summary['avg_abs_price_delta_bps']:.1f}bps" if shadow_has_history else "-",
                                 className="realized-metric-value",
                             ),
                             html.Div(
                                 (
-                                    f"{shadow_summary['total']} shadow fills tracked"
+                                    f"{shadow_summary['total']} shadow fills | total entry drag {fmt_currency(abs(float(shadow_summary['total_execution_drag_usd'])))}"
                                     if shadow_has_history
                                     else "Enable shadow mode to track a parallel portfolio"
                                 ),
@@ -1198,10 +1214,13 @@ def refresh_dashboard(_, trade_tab):
             ),
             html.Div(
                 className="compare-table",
-                children=render_table(
-                    ["Time (PT)", "Market", "Side", "Paper Px", "Shadow Px", "Delta"],
-                    shadow_fill_rows,
-                ),
+                children=[
+                    html.Div("Open Position Entries", className="analysis-label"),
+                    render_table(
+                        ["Market", "Outcome", "Paper Entry", "Shadow Entry", "Paper Shares", "Shadow Shares", "Mark Px", "Entry Gap"],
+                        compare_position_rows,
+                    ),
+                ],
             ),
         ],
     )

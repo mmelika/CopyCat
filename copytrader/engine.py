@@ -340,6 +340,14 @@ class ShadowBroker:
             price_delta_bps = ((effective_live_price - paper_price) / paper_price) * 10000 if paper_price > 0 else 0.0
         if side == "SELL":
             price_delta_bps *= -1
+        price_delta_cents = round((effective_live_price - paper_price) * 100, 3)
+        execution_drag_usd = round(
+            requested_amount_usd - (round(net_live_shares, 6) * paper_price if side == "BUY" else round(net_live_shares, 6) * effective_live_price),
+            4,
+        ) if side == "BUY" else round(
+            (round(net_live_shares, 6) * paper_price) - (round(net_live_shares, 6) * effective_live_price),
+            4,
+        )
         return {
             "shadow_order_id": str(uuid.uuid4()),
             "source_trade_id": source_trade.get("source_trade_id"),
@@ -353,6 +361,8 @@ class ShadowBroker:
             "estimated_live_price": effective_live_price,
             "estimated_live_shares": round(net_live_shares, 6),
             "price_delta_bps": round(price_delta_bps, 2),
+            "price_delta_cents": price_delta_cents,
+            "execution_drag_usd": execution_drag_usd,
             "status": "SHADOW",
             "created_at": database.utc_now(),
             "position_key": source_trade.get("position_key", ""),
