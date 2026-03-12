@@ -39,9 +39,12 @@ def parse_utc(value: str) -> datetime | None:
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def to_pacific(value: str) -> datetime | None:
@@ -63,6 +66,56 @@ def fmt_pacific_clock() -> str:
 def fmt_pacific_day(value: str) -> str:
     dt = to_pacific(value)
     return dt.strftime("%Y-%m-%d") if dt else (value or "-")
+
+
+def portfolio_range_start(end_time: datetime, range_key: str) -> datetime | None:
+    end_pacific = end_time.astimezone(PACIFIC_TZ)
+    if range_key == "1D":
+        return end_pacific.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    if range_key == "1W":
+        start_of_day = end_pacific.replace(hour=0, minute=0, second=0, microsecond=0)
+        days_since_sunday = (start_of_day.weekday() + 1) % 7
+        return (start_of_day - timedelta(days=days_since_sunday)).astimezone(timezone.utc)
+    if range_key == "1M":
+        return end_pacific.replace(day=1, hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    return None
+
+
+def snapshot_query_start_iso(range_key: str, reference_time: datetime | None = None) -> str | None:
+    start_time = portfolio_range_start(reference_time or datetime.now(timezone.utc), range_key)
+    return start_time.isoformat() if start_time else None
+
+
+def with_range_anchor(snapshots: list[dict], anchor_snapshot: dict | None, start_iso: str | None) -> list[dict]:
+    if not start_iso:
+        return snapshots
+    start_time = parse_utc(start_iso)
+    if start_time is None:
+        return snapshots
+    if anchor_snapshot is not None:
+        first_ts = parse_utc((snapshots[0] if snapshots else {}).get("ts", ""))
+        if first_ts is None or first_ts > start_time:
+            anchored = dict(anchor_snapshot)
+            anchored["ts"] = start_iso
+            snapshots = [anchored, *snapshots]
+    return snapshots
+
+
+def load_snapshots_for_range(range_key: str) -> tuple[list[dict], list[dict]]:
+    start_iso = snapshot_query_start_iso(range_key)
+    if not start_iso:
+        return (
+            database.list_portfolio_snapshots(DB_PATH, limit=2000),
+            database.list_shadow_portfolio_snapshots(DB_PATH, limit=2000),
+        )
+
+    snapshots = database.list_portfolio_snapshots(DB_PATH, since=start_iso)
+    shadow_snapshots = database.list_shadow_portfolio_snapshots(DB_PATH, since=start_iso)
+    anchor_snapshot = database.latest_portfolio_snapshot_before(start_iso, DB_PATH)
+    shadow_anchor_snapshot = database.latest_shadow_portfolio_snapshot_before(start_iso, DB_PATH)
+    snapshots = with_range_anchor(snapshots, anchor_snapshot, start_iso)
+    shadow_snapshots = with_range_anchor(shadow_snapshots, shadow_anchor_snapshot, start_iso)
+    return snapshots, shadow_snapshots
 
 
 def engine_runtime_status(app_state: dict, settings: dict) -> tuple[str, str, int | None]:
@@ -562,9 +615,9 @@ app.layout = html.Div(
                         html.Div(
                             className="dashboard-col",
                             children=[
+                                trade_views(),
                                 section("Target Trade Feed", "copied-trades-table", "copied-trades-badge"),
                                 section("Sell Match Audit", "sell-match-table", "sell-match-badge"),
-                                trade_views(),
                                 section("Execution Compare", "analysis-panel"),
                                 section("Engine Log", "engine-log-table", "engine-log-badge"),
                             ],
@@ -594,25 +647,9 @@ def render_table(headers, rows):
 
 def portfolio_chart(range_key: str):
     settings = database.get_settings(DB_PATH)
-    snapshots = database.list_portfolio_snapshots(DB_PATH, limit=720)
-    shadow_snapshots = database.list_shadow_portfolio_snapshots(DB_PATH, limit=720)
+    snapshots, shadow_snapshots = load_snapshots_for_range(range_key)
     if not snapshots:
         snapshots = [{"ts": datetime.now(timezone.utc).isoformat(), "net_value": 0.0}]
-
-    end_time = parse_utc(snapshots[-1]["ts"]) or datetime.now(timezone.utc)
-    range_windows = {
-        "1D": timedelta(days=1),
-        "1W": timedelta(weeks=1),
-        "1M": timedelta(days=30),
-    }
-    if range_key in range_windows:
-        start_time = end_time - range_windows[range_key]
-        filtered = [row for row in snapshots if (parse_utc(row["ts"]) or end_time) >= start_time]
-        if filtered:
-            snapshots = filtered
-        shadow_filtered = [row for row in shadow_snapshots if (parse_utc(row["ts"]) or end_time) >= start_time]
-        if shadow_filtered:
-            shadow_snapshots = shadow_filtered
 
     baseline = float(snapshots[0]["net_value"] or 0.0)
     current_value = float(snapshots[-1]["net_value"] or 0.0)
@@ -620,7 +657,7 @@ def portfolio_chart(range_key: str):
     positive = change_value >= 0
     line_color = "#1fa2ff" if positive else "#ff7d7d"
     fill_color = "rgba(31,162,255,0.18)" if positive else "rgba(255,125,125,0.14)"
-    x_values = [to_pacific(row["ts"]).strftime("%b %d %I:%M %p") if to_pacific(row["ts"]) else row["ts"] for row in snapshots]
+    x_values = [to_pacific(row["ts"]) or row["ts"] for row in snapshots]
     y_values = [float(row["net_value"] or 0.0) for row in snapshots]
 
     figure = go.Figure()
@@ -638,7 +675,7 @@ def portfolio_chart(range_key: str):
     )
     shadow_mode_active = (settings.get("execution_mode") or "paper").strip().lower() == "shadow"
     if shadow_mode_active and shadow_snapshots:
-        shadow_x_values = [to_pacific(row["ts"]).strftime("%b %d %I:%M %p") if to_pacific(row["ts"]) else row["ts"] for row in shadow_snapshots]
+        shadow_x_values = [to_pacific(row["ts"]) or row["ts"] for row in shadow_snapshots]
         shadow_y_values = [float(row["net_value"] or 0.0) for row in shadow_snapshots]
         figure.add_trace(
             go.Scatter(
@@ -664,6 +701,7 @@ def portfolio_chart(range_key: str):
             "showline": False,
             "showticklabels": False,
             "fixedrange": True,
+            "type": "date",
         },
         yaxis={
             "showgrid": False,
@@ -678,9 +716,9 @@ def portfolio_chart(range_key: str):
 
 def portfolio_range_meta(range_key: str) -> tuple[str, str]:
     labels = {
-        "1D": "Past Day",
-        "1W": "Past Week",
-        "1M": "Past Month",
+        "1D": "Today (PT)",
+        "1W": "This Week (PT)",
+        "1M": "This Month (PT)",
         "ALL": "All Time",
     }
     button_map = {
@@ -689,7 +727,7 @@ def portfolio_range_meta(range_key: str) -> tuple[str, str]:
         "1M": "portfolio-range-btn portfolio-range-btn-active",
         "ALL": "portfolio-range-btn portfolio-range-btn-active",
     }
-    return labels.get(range_key, "Past Day"), button_map.get(range_key, "portfolio-range-btn portfolio-range-btn-active")
+    return labels.get(range_key, "Today (PT)"), button_map.get(range_key, "portfolio-range-btn portfolio-range-btn-active")
 
 
 @app.callback(
@@ -726,33 +764,21 @@ def set_portfolio_range(_, __, ___, ____, current_range):
 def refresh_portfolio_chart(_, range_key):
     selected_range = range_key or "1D"
     settings = database.get_settings(DB_PATH)
-    snapshots = database.list_portfolio_snapshots(DB_PATH, limit=720)
+    snapshots, _ = load_snapshots_for_range(selected_range)
     if not snapshots:
         amount_text = fmt_signed_currency(0.0)
     else:
-        end_time = parse_utc(snapshots[-1]["ts"]) or datetime.now(timezone.utc)
-        range_windows = {
-            "1D": timedelta(days=1),
-            "1W": timedelta(weeks=1),
-            "1M": timedelta(days=30),
-        }
-        filtered = snapshots
-        if selected_range in range_windows:
-            start_time = end_time - range_windows[selected_range]
-            scoped = [row for row in snapshots if (parse_utc(row["ts"]) or end_time) >= start_time]
-            if scoped:
-                filtered = scoped
-        baseline = float(filtered[0]["net_value"] or 0.0)
-        current_value = float(filtered[-1]["net_value"] or 0.0)
+        baseline = float(snapshots[0]["net_value"] or 0.0)
+        current_value = float(snapshots[-1]["net_value"] or 0.0)
         amount_text = fmt_signed_currency(current_value - baseline)
 
     subtitle_map = {
-        "1D": "Past Day",
-        "1W": "Past Week",
-        "1M": "Past Month",
+        "1D": "Today (PT)",
+        "1W": "This Week (PT)",
+        "1M": "This Month (PT)",
         "ALL": "All Time",
     }
-    subtitle = subtitle_map.get(selected_range, "Past Day")
+    subtitle = subtitle_map.get(selected_range, "Today (PT)")
     if (settings.get("execution_mode") or "paper").strip().lower() == "shadow":
         subtitle = f"{subtitle} | solid paper, dotted shadow"
     button_classes = []
@@ -953,7 +979,7 @@ def refresh_dashboard(_, trade_tab):
                         children=[
                             market_link(row["market_title"], row["market_slug"], 42),
                             html.Div(
-                                f"{row['outcome']} | {fmt_number(row['shares'], 2)} shares @ {fmt_number(row['current_price'], 3)}",
+                                f"{row['outcome']} | spent {fmt_currency(row['cost_basis'])} @ {fmt_number(row['current_price'], 3)}",
                                 className="portfolio-holding-subtitle",
                             ),
                         ],

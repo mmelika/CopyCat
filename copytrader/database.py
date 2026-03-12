@@ -784,8 +784,18 @@ def snapshot_shadow_portfolio(
         )
 
 
-def list_portfolio_snapshots(db_path: Path | str = DB_PATH, limit: int = 120) -> list[dict]:
+def list_portfolio_snapshots(db_path: Path | str = DB_PATH, limit: int = 120, since: str | None = None) -> list[dict]:
     with connect(db_path) as conn:
+        if since:
+            rows = conn.execute(
+                """
+                SELECT * FROM portfolio_snapshots
+                WHERE ts >= ?
+                ORDER BY id ASC
+                """,
+                (since,),
+            ).fetchall()
+            return [dict(row) for row in rows]
         rows = conn.execute(
             """
             SELECT * FROM portfolio_snapshots
@@ -794,11 +804,21 @@ def list_portfolio_snapshots(db_path: Path | str = DB_PATH, limit: int = 120) ->
             """,
             (limit,),
         ).fetchall()
-    return [dict(row) for row in reversed(rows)]
+        return [dict(row) for row in reversed(rows)]
 
 
-def list_shadow_portfolio_snapshots(db_path: Path | str = DB_PATH, limit: int = 120) -> list[dict]:
+def list_shadow_portfolio_snapshots(db_path: Path | str = DB_PATH, limit: int = 120, since: str | None = None) -> list[dict]:
     with connect(db_path) as conn:
+        if since:
+            rows = conn.execute(
+                """
+                SELECT * FROM shadow_portfolio_snapshots
+                WHERE ts >= ?
+                ORDER BY id ASC
+                """,
+                (since,),
+            ).fetchall()
+            return [dict(row) for row in rows]
         rows = conn.execute(
             """
             SELECT * FROM shadow_portfolio_snapshots
@@ -807,7 +827,35 @@ def list_shadow_portfolio_snapshots(db_path: Path | str = DB_PATH, limit: int = 
             """,
             (limit,),
         ).fetchall()
-    return [dict(row) for row in reversed(rows)]
+        return [dict(row) for row in reversed(rows)]
+
+
+def latest_portfolio_snapshot_before(before_ts: str, db_path: Path | str = DB_PATH) -> dict | None:
+    with connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM portfolio_snapshots
+            WHERE ts < ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (before_ts,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def latest_shadow_portfolio_snapshot_before(before_ts: str, db_path: Path | str = DB_PATH) -> dict | None:
+    with connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM shadow_portfolio_snapshots
+            WHERE ts < ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (before_ts,),
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def portfolio_totals(db_path: Path | str = DB_PATH, source_positions: list[dict] | None = None) -> dict:
@@ -1062,24 +1110,23 @@ def _trade_analytics_from_orders(
             if lot["remaining_shares"] <= 1e-9:
                 lots.pop(0)
 
-    if source_positions is None:
-        source_positions = fetch_live_market_prices(
-            [
-                {
-                    "market_slug": lot.get("market_slug"),
-                    "market_title": lot.get("market_title"),
-                    "outcome": lot.get("outcome"),
-                    "position_key": lot.get("position_key"),
-                }
-                for lots in lots_by_key.values()
-                for lot in lots
-                if float(lot.get("remaining_shares") or 0.0) > 1e-9
-            ],
-            db_path,
-        )
-        if not source_positions:
-            source_positions = fetch_live_source_positions(db_path)
-    price_map, alias_price_map = _price_maps_from_positions(source_positions)
+    open_position_refs = [
+        {
+            "market_slug": lot.get("market_slug"),
+            "market_title": lot.get("market_title"),
+            "outcome": lot.get("outcome"),
+            "position_key": lot.get("position_key"),
+        }
+        for lots in lots_by_key.values()
+        for lot in lots
+        if float(lot.get("remaining_shares") or 0.0) > 1e-9
+    ]
+    market_price_positions = fetch_live_market_prices(open_position_refs, db_path) if open_position_refs else []
+    effective_source_positions = list(source_positions or [])
+    if not effective_source_positions and not market_price_positions:
+        effective_source_positions = fetch_live_source_positions(db_path)
+    effective_source_positions.extend(market_price_positions)
+    price_map, alias_price_map = _price_maps_from_positions(effective_source_positions)
 
     for lots in lots_by_key.values():
         for lot in lots:
