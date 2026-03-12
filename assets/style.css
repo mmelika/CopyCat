@@ -620,28 +620,6 @@ tbody td {
   overflow-x: auto;
 }
 
-.compare-stack {
-  display: grid;
-  gap: 12px;
-}
-
-.compare-summary {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.compare-metric {
-  padding: 14px 15px;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(154, 188, 220, 0.10);
-}
-
-.compare-table {
-  overflow-x: auto;
-}
-
 .portfolio-holding-row {
   display: flex;
   justify-content: space-between;
@@ -784,33 +762,6 @@ tbody td {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
-}
-
-.portfolio-view-btn {
-  min-width: 88px;
-  padding: 10px 14px;
-  border-radius: 18px;
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  color: #b8c6d4;
-  background: rgba(255, 255, 255, 0.03);
-  font-size: 13px;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  cursor: pointer;
-  transition: 140ms ease;
-}
-
-.portfolio-view-btn:hover {
-  color: #eef6ff;
-  border-color: rgba(255, 255, 255, 0.14);
-  background: rgba(255, 255, 255, 0.06);
-}
-
-.portfolio-view-btn-active {
-  color: #0f1a12;
-  border-color: rgba(255, 191, 71, 0.36);
-  background: linear-gradient(180deg, rgba(255, 191, 71, 0.96), rgba(255, 163, 71, 0.92));
-  box-shadow: 0 0 0 5px rgba(255, 191, 71, 0.10);
 }
 
 .portfolio-range-btn {
@@ -1011,8 +962,7 @@ tbody td {
   .stats-row,
   .dashboard-grid,
   .modal-row,
-  .market-strip-grid,
-  .compare-summary {
+  .market-strip-grid {
     grid-template-columns: 1fr;
   }
 

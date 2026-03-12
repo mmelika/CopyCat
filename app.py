@@ -177,25 +177,6 @@ def signed_class(value) -> str:
     return "text-muted"
 
 
-def shadow_source_label(value: str) -> str:
-    mapping = {
-        "book-filled": "Book Filled",
-        "book-partial": "Book Partial",
-        "fallback-reference": "Fallback Ref",
-    }
-    return mapping.get((value or "").strip(), value or "-")
-
-
-def shadow_liquidity_label(value: str) -> str:
-    mapping = {
-        "high": "High",
-        "medium": "Medium",
-        "low": "Low",
-        "unknown": "Unknown",
-    }
-    return mapping.get((value or "").strip(), value or "-")
-
-
 def short_text(value, limit: int) -> str:
     return (value or "")[:limit]
 
@@ -467,7 +448,7 @@ def settings_modal():
                                         ],
                                         "Paper keeps current behavior. Shadow also logs estimated live fills without placing orders.",
                                     ),
-                                    number_field("Fallback Slippage Bps", "settings-shadow-extra-slippage-bps", "15", "Only used if live order book data is unavailable for a shadow estimate.", min_value=0, step=1),
+                                    number_field("Shadow Extra Slippage Bps", "settings-shadow-extra-slippage-bps", "15", "Additional simulated slippage applied only to shadow live estimates.", min_value=0, step=1),
                                 ],
                             ),
                             html.Div(
@@ -520,7 +501,6 @@ def portfolio_curve_card():
         className="portfolio-card",
         children=[
             dcc.Store(id="portfolio-range-store", data="1D"),
-            dcc.Store(id="portfolio-view-store", data="both"),
             html.Div(
                 className="portfolio-card-top",
                 children=[
@@ -535,9 +515,6 @@ def portfolio_curve_card():
                     html.Div(
                         className="portfolio-range-group",
                         children=[
-                            html.Button("Paper", id="portfolio-view-paper", className="portfolio-view-btn", n_clicks=0),
-                            html.Button("Shadow", id="portfolio-view-shadow", className="portfolio-view-btn", n_clicks=0),
-                            html.Button("Both", id="portfolio-view-both", className="portfolio-view-btn portfolio-view-btn-active", n_clicks=0),
                             html.Button("1D", id="portfolio-range-1d", className="portfolio-range-btn", n_clicks=0),
                             html.Button("1W", id="portfolio-range-1w", className="portfolio-range-btn", n_clicks=0),
                             html.Button("1M", id="portfolio-range-1m", className="portfolio-range-btn", n_clicks=0),
@@ -588,7 +565,7 @@ app.layout = html.Div(
                                 section("Target Trade Feed", "copied-trades-table", "copied-trades-badge"),
                                 section("Sell Match Audit", "sell-match-table", "sell-match-badge"),
                                 trade_views(),
-                                section("Execution Compare", "analysis-panel"),
+                                section("Live Analysis", "analysis-panel"),
                                 section("Engine Log", "engine-log-table", "engine-log-badge"),
                             ],
                         ),
@@ -615,10 +592,8 @@ def render_table(headers, rows):
     )
 
 
-def portfolio_chart(range_key: str, view_key: str = "both"):
-    settings = database.get_settings(DB_PATH)
+def portfolio_chart(range_key: str):
     snapshots = database.list_portfolio_snapshots(DB_PATH, limit=720)
-    shadow_snapshots = database.list_shadow_portfolio_snapshots(DB_PATH, limit=720)
     if not snapshots:
         snapshots = [{"ts": datetime.now(timezone.utc).isoformat(), "net_value": 0.0}]
 
@@ -633,9 +608,6 @@ def portfolio_chart(range_key: str, view_key: str = "both"):
         filtered = [row for row in snapshots if (parse_utc(row["ts"]) or end_time) >= start_time]
         if filtered:
             snapshots = filtered
-        shadow_filtered = [row for row in shadow_snapshots if (parse_utc(row["ts"]) or end_time) >= start_time]
-        if shadow_filtered:
-            shadow_snapshots = shadow_filtered
 
     baseline = float(snapshots[0]["net_value"] or 0.0)
     current_value = float(snapshots[-1]["net_value"] or 0.0)
@@ -647,36 +619,18 @@ def portfolio_chart(range_key: str, view_key: str = "both"):
     y_values = [float(row["net_value"] or 0.0) for row in snapshots]
 
     figure = go.Figure()
-    if view_key in {"paper", "both"}:
-        figure.add_trace(
-            go.Scatter(
-                x=x_values,
-                y=y_values,
-                mode="lines",
-                line={"color": line_color, "width": 4, "shape": "spline", "smoothing": 1.05},
-                fill="tozeroy" if view_key == "paper" else None,
-                fillcolor=fill_color,
-                hovertemplate="Paper %{x}<br>%{y:$,.2f}<extra></extra>",
-                showlegend=False,
-            )
+    figure.add_trace(
+        go.Scatter(
+            x=x_values,
+            y=y_values,
+            mode="lines",
+            line={"color": line_color, "width": 4, "shape": "spline", "smoothing": 1.05},
+            fill="tozeroy",
+            fillcolor=fill_color,
+            hovertemplate="%{x}<br>%{y:$,.2f}<extra></extra>",
+            showlegend=False,
         )
-    shadow_mode_active = (settings.get("execution_mode") or "paper").strip().lower() == "shadow"
-    if shadow_mode_active and shadow_snapshots and view_key in {"shadow", "both"}:
-        shadow_x_values = [to_pacific(row["ts"]).strftime("%b %d %I:%M %p") if to_pacific(row["ts"]) else row["ts"] for row in shadow_snapshots]
-        shadow_y_values = [float(row["net_value"] or 0.0) for row in shadow_snapshots]
-        figure.add_trace(
-            go.Scatter(
-                x=shadow_x_values,
-                y=shadow_y_values,
-                mode="lines",
-                line={"color": "#ffbf47", "width": 4 if view_key == "shadow" else 2.5, "dash": "dot"},
-                fill="tozeroy" if view_key == "shadow" else None,
-                fillcolor="rgba(255,191,71,0.12)",
-                hovertemplate="Shadow %{x}<br>%{y:$,.2f}<extra></extra>",
-                name="Shadow",
-                showlegend=False,
-            )
-        )
+    )
     figure.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
@@ -739,43 +693,19 @@ def set_portfolio_range(_, __, ___, ____, current_range):
 
 
 @app.callback(
-    Output("portfolio-view-store", "data"),
-    Input("portfolio-view-paper", "n_clicks"),
-    Input("portfolio-view-shadow", "n_clicks"),
-    Input("portfolio-view-both", "n_clicks"),
-    State("portfolio-view-store", "data"),
-    prevent_initial_call=True,
-)
-def set_portfolio_view(_, __, ___, current_view):
-    mapping = {
-        "portfolio-view-paper": "paper",
-        "portfolio-view-shadow": "shadow",
-        "portfolio-view-both": "both",
-    }
-    return mapping.get(callback_context.triggered_id, current_view)
-
-
-@app.callback(
     Output("portfolio-chart", "figure"),
     Output("portfolio-chart-amount", "children"),
     Output("portfolio-chart-subtitle", "children"),
-    Output("portfolio-view-paper", "className"),
-    Output("portfolio-view-shadow", "className"),
-    Output("portfolio-view-both", "className"),
     Output("portfolio-range-1d", "className"),
     Output("portfolio-range-1w", "className"),
     Output("portfolio-range-1m", "className"),
     Output("portfolio-range-all", "className"),
     Input("refresh-interval", "n_intervals"),
     Input("portfolio-range-store", "data"),
-    Input("portfolio-view-store", "data"),
 )
-def refresh_portfolio_chart(_, range_key, view_key):
+def refresh_portfolio_chart(_, range_key):
     selected_range = range_key or "1D"
-    selected_view = view_key or "both"
-    settings = database.get_settings(DB_PATH)
     snapshots = database.list_portfolio_snapshots(DB_PATH, limit=720)
-    shadow_snapshots = database.list_shadow_portfolio_snapshots(DB_PATH, limit=720)
     if not snapshots:
         amount_text = fmt_signed_currency(0.0)
     else:
@@ -791,14 +721,8 @@ def refresh_portfolio_chart(_, range_key, view_key):
             scoped = [row for row in snapshots if (parse_utc(row["ts"]) or end_time) >= start_time]
             if scoped:
                 filtered = scoped
-            shadow_scoped = [row for row in shadow_snapshots if (parse_utc(row["ts"]) or end_time) >= start_time]
-            if shadow_scoped:
-                shadow_snapshots = shadow_scoped
-        focus_snapshots = filtered
-        if selected_view == "shadow" and shadow_snapshots:
-            focus_snapshots = shadow_snapshots
-        baseline = float(focus_snapshots[0]["net_value"] or 0.0)
-        current_value = float(focus_snapshots[-1]["net_value"] or 0.0)
+        baseline = float(filtered[0]["net_value"] or 0.0)
+        current_value = float(filtered[-1]["net_value"] or 0.0)
         amount_text = fmt_signed_currency(current_value - baseline)
 
     subtitle_map = {
@@ -807,20 +731,13 @@ def refresh_portfolio_chart(_, range_key, view_key):
         "1M": "Past Month",
         "ALL": "All Time",
     }
-    subtitle = subtitle_map.get(selected_range, "Past Day")
-    if (settings.get("execution_mode") or "paper").strip().lower() == "shadow":
-        subtitle = f"{subtitle} | viewing {selected_view}"
-    view_button_classes = []
-    for key in ("paper", "shadow", "both"):
-        view_button_classes.append("portfolio-view-btn portfolio-view-btn-active" if key == selected_view else "portfolio-view-btn")
     button_classes = []
     for key in ("1D", "1W", "1M", "ALL"):
         button_classes.append("portfolio-range-btn portfolio-range-btn-active" if key == selected_range else "portfolio-range-btn")
     return (
-        portfolio_chart(selected_range, selected_view),
+        portfolio_chart(selected_range),
         amount_text,
-        subtitle,
-        *view_button_classes,
+        subtitle_map.get(selected_range, "Past Day"),
         *button_classes,
     )
 
@@ -872,9 +789,8 @@ def refresh_portfolio_chart(_, range_key, view_key):
     Output("engine-log-table", "children"),
     Input("refresh-interval", "n_intervals"),
     Input("trade-tabs", "value"),
-    Input("portfolio-view-store", "data"),
 )
-def refresh_dashboard(_, trade_tab, view_key):
+def refresh_dashboard(_, trade_tab):
     settings = database.get_settings(DB_PATH)
     app_state = database.get_app_state(DB_PATH)
     runtime_status, runtime_class, stale_age_seconds = engine_runtime_status(app_state, settings)
@@ -882,16 +798,13 @@ def refresh_dashboard(_, trade_tab, view_key):
     source_positions = live_positions[:10]
     source_trades = database.list_source_trades(18, DB_PATH)
     copy_orders = database.list_copy_orders(12, DB_PATH)
-    shadow_orders = database.list_shadow_orders(8, DB_PATH)
     shadow_summary = database.shadow_order_summary(DB_PATH)
     sell_match_rows = database.list_sell_match_audit(12, DB_PATH)
     pending = database.list_pending_source_trades(DB_PATH)
     sync_runs = database.list_sync_runs(12, DB_PATH)
     logs = database.list_logs(14, DB_PATH)
     portfolio = database.portfolio_totals(DB_PATH, live_positions)
-    shadow_portfolio = database.shadow_portfolio_totals(DB_PATH, live_positions)
     analytics = database.trade_analytics(DB_PATH, live_positions)
-    shadow_analytics = database.shadow_trade_analytics(DB_PATH, live_positions)
     daily_performance = database.daily_portfolio_performance(DB_PATH)[:12]
     daily_realized_map = {row["date"]: row["realized_pnl"] for row in analytics["daily_realized"]}
     effective_exposure_cap = _effective_exposure_cap(settings, portfolio)
@@ -1172,11 +1085,10 @@ def refresh_dashboard(_, trade_tab, view_key):
     target_wallet = app_state.get("resolved_target_wallet") or settings["target_wallet"] or "Not resolved yet"
     execution_mode = (settings.get("execution_mode") or "paper").strip().lower()
     shadow_mode_active = execution_mode == "shadow"
-    selected_view = view_key or "both"
     execution_pill_text = "SHADOW MODE" if shadow_mode_active else "PAPER MODE"
     execution_pill_class = "mode-pill mode-shadow" if shadow_mode_active else "mode-pill mode-paper"
     market_execution = (
-        "Shadow order book"
+        f"Shadow +{int(settings.get('shadow_extra_slippage_bps') or 0)}bps"
         if shadow_mode_active
         else "Paper simulation"
     )
@@ -1186,121 +1098,7 @@ def refresh_dashboard(_, trade_tab, view_key):
         if shadow_mode_active
         else f"No shadow portfolio active | {target_label}"
     )
-    shadow_delta = round(float(shadow_portfolio["net_value"]) - float(portfolio["net_value"]), 2)
-    shadow_delta_text = fmt_signed_currency(shadow_delta)
-    shadow_tone = signed_class(shadow_delta)
     shadow_has_history = shadow_mode_active and shadow_summary["total"] > 0
-    shadow_net_display = fmt_currency(shadow_portfolio["net_value"]) if shadow_has_history else ("Starting flat" if shadow_mode_active else "Disabled")
-    shadow_positions_sub = (
-        f"{shadow_portfolio['positions_count']} open positions"
-        if shadow_has_history
-        else ("Waiting for shadow fills" if shadow_mode_active else "Turn on shadow mode in Settings")
-    )
-    shadow_fill_rows = [
-        [
-            fmt_pacific_time(row["created_at"]),
-            short_text(row["market_title"], 20),
-            row["side"],
-            shadow_source_label(row.get("estimate_source")),
-            shadow_liquidity_label(row.get("liquidity_tier")),
-            fmt_number(row["paper_price"], 3),
-            fmt_number(row["estimated_live_price"], 3),
-            f"{float(row.get('price_delta_cents') or 0.0):+.2f}c",
-            fmt_signed_currency(float(row.get("execution_drag_usd") or 0.0)),
-        ]
-        for row in shadow_orders[:6]
-    ] or [["No shadow fills yet", "-", "-", "-", "-", "-", "-", "-", "-"]]
-    compare_table_rows = shadow_fill_rows
-    compare_headers = ["Time (PT)", "Market", "Side", "Source", "Liquidity", "Paper Px", "Shadow Px", "Delta", "Drag"]
-    shadow_status_counts = {"book-filled": 0, "book-partial": 0, "fallback-reference": 0}
-    shadow_liquidity_counts = {"high": 0, "medium": 0, "low": 0}
-    for row in shadow_orders:
-        status_key = (row.get("estimate_source") or "").strip()
-        if status_key in shadow_status_counts:
-            shadow_status_counts[status_key] += 1
-        liquidity_key = (row.get("liquidity_tier") or "").strip()
-        if liquidity_key in shadow_liquidity_counts:
-            shadow_liquidity_counts[liquidity_key] += 1
-    if selected_view == "paper":
-        compare_headers = ["Metric", "Value"]
-        compare_table_rows = [
-            ["Paper Net", fmt_currency(portfolio["net_value"])],
-            ["Paper Positions", str(portfolio["positions_count"])],
-            ["Paper Gain", fmt_signed_currency(portfolio["total_gain"])],
-        ]
-    elif selected_view == "shadow":
-        compare_headers = ["Metric", "Value"]
-        compare_table_rows = [
-            ["Shadow Net", shadow_net_display],
-            ["Shadow Positions", shadow_positions_sub],
-            ["Avg Fill Drift", f"{shadow_summary['avg_abs_price_delta_cents']:.2f}c" if shadow_has_history else "-"],
-            ["Total Drag", fmt_signed_currency(float(shadow_summary["total_execution_drag_usd"])) if shadow_has_history else "-"],
-            ["High Liquidity", str(shadow_liquidity_counts["high"])],
-            ["Medium Liquidity", str(shadow_liquidity_counts["medium"])],
-            ["Low Liquidity", str(shadow_liquidity_counts["low"])],
-            ["Book Filled", str(shadow_status_counts["book-filled"])],
-            ["Book Partial", str(shadow_status_counts["book-partial"])],
-            ["Fallback Ref", str(shadow_status_counts["fallback-reference"])],
-        ]
-    compare_panel = html.Div(
-        className="compare-stack",
-        children=[
-            html.Div(
-                className="compare-summary",
-                children=[
-                    html.Div(
-                        className="compare-metric",
-                        children=[
-                            html.Div("Paper Net", className="realized-metric-label"),
-                            html.Div(fmt_currency(portfolio["net_value"]), className="realized-metric-value"),
-                            html.Div(f"{portfolio['positions_count']} open positions", className="realized-metric-sub"),
-                        ],
-                    ),
-                    html.Div(
-                        className="compare-metric",
-                        children=[
-                            html.Div("Shadow Net", className="realized-metric-label"),
-                            html.Div(shadow_net_display, className="realized-metric-value"),
-                            html.Div(shadow_positions_sub, className="realized-metric-sub"),
-                        ],
-                    ),
-                    html.Div(
-                        className="compare-metric",
-                        children=[
-                            html.Div("Shadow Delta", className="realized-metric-label"),
-                            html.Div(shadow_delta_text, className=f"realized-metric-value {shadow_tone}"),
-                            html.Div("Shadow net minus paper net", className="realized-metric-sub"),
-                        ],
-                    ),
-                    html.Div(
-                        className="compare-metric",
-                        children=[
-                            html.Div("Avg Fill Drift", className="realized-metric-label"),
-                            html.Div(
-                                f"{shadow_summary['avg_abs_price_delta_cents']:.2f}c" if shadow_has_history else "-",
-                                className="realized-metric-value",
-                            ),
-                            html.Div(
-                                (
-                                    f"{shadow_summary['total']} shadow fills | drag {fmt_signed_currency(float(shadow_summary['total_execution_drag_usd']))}"
-                                    if shadow_has_history
-                                    else "Enable shadow mode to track a parallel portfolio"
-                                ),
-                                className="realized-metric-sub",
-                            ),
-                        ],
-                    ),
-                ],
-            ),
-            html.Div(
-                className="compare-table",
-                children=render_table(
-                    compare_headers,
-                    compare_table_rows,
-                ),
-            ),
-        ],
-    )
     analysis = html.Div(
         className="analysis-stack",
         children=[
@@ -1326,17 +1124,50 @@ def refresh_dashboard(_, trade_tab, view_key):
             html.Div(
                 className="analysis-block",
                 children=[
-                    html.Div("Portfolio Compare", className="analysis-label"),
-                    compare_panel,
+                    html.Div("Execution Mode", className="analysis-label"),
+                    html.Div(
+                        (
+                            f"Shadow mode: paper remains authoritative while estimated live fills are logged with +{int(settings.get('shadow_extra_slippage_bps') or 0)}bps extra slippage."
+                            if shadow_mode_active
+                            else "Paper mode only."
+                        ),
+                        className="analysis-text",
+                    ),
                 ],
             ),
             html.Div(
                 className="analysis-block",
                 children=[
-                    html.Div("Engine Context", className="analysis-label"),
+                    html.Div("Fast Copy Model", className="analysis-label"),
                     html.Div(
-                        f"Polling every {settings['sync_interval_ms']}ms with {settings['trade_fetch_limit']} recent source trades. Leader NAV {fmt_currency(float(app_state.get('leader_wallet_value') or 0.0))}.",
+                        f"Polling every {settings['sync_interval_ms']}ms with {settings['trade_fetch_limit']} trade lookback. "
+                        "Paper execution sizes buys from available cash, caps each new bet at 20% of current cash, "
+                        "and refreshes dashboard marks independently every 5 seconds.",
                         className="analysis-text",
+                    ),
+                ],
+            ),
+            html.Div(
+                className="analysis-block",
+                children=[
+                    html.Div("Shadow Drift", className="analysis-label"),
+                    html.Div(
+                        (
+                            f"{shadow_summary['total']} previews logged | avg abs delta {shadow_summary['avg_abs_price_delta_bps']:.2f}bps | max abs delta {shadow_summary['max_abs_price_delta_bps']:.2f}bps"
+                            if shadow_mode_active and shadow_summary["total"]
+                            else ("No shadow previews logged yet." if shadow_mode_active else "Shadow mode disabled.")
+                        ),
+                        className="analysis-text mono",
+                    ),
+                ],
+            ),
+            html.Div(
+                className="analysis-block",
+                children=[
+                    html.Div("Leader Wallet Value", className="analysis-label"),
+                    html.Div(
+                        fmt_currency(float(app_state.get("leader_wallet_value") or 0.0)),
+                        className="analysis-text mono",
                     ),
                 ],
             ),
@@ -1379,9 +1210,9 @@ def refresh_dashboard(_, trade_tab, view_key):
         execution_card_value,
         execution_card_sub,
         str(len(pending)),
-        f"{len(copy_orders)} paper orders | {len(shadow_orders)} recent shadow rows" if shadow_mode_active else f"{len(copy_orders)} total copied orders",
+        f"{len(copy_orders)} total copied orders",
         fmt_currency(active_positions_value),
-        f"{portfolio['positions_count']} paper positions" + (f" | shadow {len(shadow_analytics['open_positions'])}" if shadow_mode_active else ""),
+        f"{portfolio['positions_count']} active positions | updated every 5s",
         fmt_currency(portfolio["net_value"]),
         net_chip_text,
         f"stat-chip {signed_class(net_gain)}",

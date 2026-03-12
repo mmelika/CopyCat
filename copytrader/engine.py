@@ -261,107 +261,19 @@ class PaperBroker:
 
 
 class ShadowBroker:
-    def __init__(self, client: PolymarketClient):
-        self.client = client
-
-    def _resolve_token_id(self, source_trade: dict) -> str:
-        token_id = (source_trade.get("token_id") or "").strip()
-        if token_id:
-            return token_id
-        market_prices = self.client.fetch_market_prices([source_trade])
-        match = next(
-            (
-                row for row in market_prices
-                if (row.get("market_slug") or "") == (source_trade.get("market_slug") or "")
-                and (row.get("outcome") or "") == (source_trade.get("outcome") or "")
-            ),
-            None,
-        )
-        return (match or {}).get("token_id", "")
-
-    def _classify_liquidity_tier(self, levels: list[dict], requested_amount_usd: float) -> tuple[str, float, float]:
-        if not levels:
-            return "unknown", 0.0, 0.0
-        best_price = _clamp(float(levels[0].get("price") or 0.0), 0.01, 0.99)
-        best_size = max(float(levels[0].get("size") or 0.0), 0.0)
-        best_level_notional = round(best_price * best_size, 2)
-        top_three_depth = 0.0
-        for level in levels[:3]:
-            price = _clamp(float(level.get("price") or 0.0), 0.01, 0.99)
-            size = max(float(level.get("size") or 0.0), 0.0)
-            top_three_depth += price * size
-        top_three_depth = round(top_three_depth, 2)
-
-        if best_level_notional >= requested_amount_usd and top_three_depth >= requested_amount_usd * 2:
-            return "high", best_level_notional, top_three_depth
-        if top_three_depth >= requested_amount_usd or best_level_notional >= max(requested_amount_usd * 0.25, 5.0):
-            return "medium", best_level_notional, top_three_depth
-        return "low", best_level_notional, top_three_depth
-
-    def _estimate_from_book(self, *, token_id: str, side: str, requested_amount_usd: float, fallback_price: float) -> tuple[float, float, float, str, str, float, float]:
-        book = self.client.fetch_order_book(token_id)
-        levels = book.get("asks") if side == "BUY" else book.get("bids")
-        if not isinstance(levels, list) or not levels:
-            fallback_shares = round(requested_amount_usd / fallback_price, 6) if fallback_price > 0 else 0.0
-            return fallback_price, fallback_shares, round(requested_amount_usd, 2), "fallback-reference", "low", 0.0, 0.0
-
-        liquidity_tier, best_level_notional, top_three_depth = self._classify_liquidity_tier(levels, requested_amount_usd)
-
-        if liquidity_tier == "high":
-            best_price = _clamp(float(levels[0].get("price") or 0.0), 0.01, 0.99)
-            filled_shares = round(requested_amount_usd / best_price, 6) if best_price > 0 else 0.0
-            return best_price, filled_shares, round(requested_amount_usd, 2), "book-filled", liquidity_tier, best_level_notional, top_three_depth
-
-        spent = 0.0
-        filled_shares = 0.0
-        for level in levels:
-            price = _clamp(float(level.get("price") or 0.0), 0.01, 0.99)
-            size = max(float(level.get("size") or 0.0), 0.0)
-            if price <= 0 or size <= 0:
-                continue
-            remaining_notional = max(requested_amount_usd - spent, 0.0)
-            if remaining_notional <= 1e-9:
-                break
-            fill_shares = min(size, remaining_notional / price)
-            if fill_shares <= 0:
-                continue
-            fill_notional = fill_shares * price
-            spent += fill_notional
-            filled_shares += fill_shares
-
-        if filled_shares <= 0:
-            fallback_shares = round(requested_amount_usd / fallback_price, 6) if fallback_price > 0 else 0.0
-            return fallback_price, fallback_shares, round(requested_amount_usd, 2), "fallback-reference", liquidity_tier, best_level_notional, top_three_depth
-
-        avg_price = round(spent / filled_shares, 4)
-        actual_notional = round(spent, 2)
-        status = "book-partial" if actual_notional + 0.009 < round(requested_amount_usd, 2) else "book-filled"
-        return avg_price, round(filled_shares, 6), actual_notional, status, liquidity_tier, best_level_notional, top_three_depth
-
     def preview(self, source_trade: dict, requested_amount_usd: float, settings: dict) -> dict:
         side = source_trade["side"]
         source_price = max(float(source_trade.get("price") or 0.0), 0.01)
         paper_slippage = float(settings["slippage_bps"]) / 10000.0
+        extra_live_slippage = float(settings.get("shadow_extra_slippage_bps") or 0.0) / 10000.0
         paper_price = source_price * (1 + paper_slippage) if side == "BUY" else source_price * (1 - paper_slippage)
+        live_price = source_price * (1 + paper_slippage + extra_live_slippage) if side == "BUY" else source_price * (1 - paper_slippage - extra_live_slippage)
         paper_price = round(_clamp(paper_price, 0.01, 0.99), 4)
-        fallback_live_slippage = float(settings.get("shadow_extra_slippage_bps") or 0.0) / 10000.0
-        fallback_live_price = paper_price * (1 + fallback_live_slippage) if side == "BUY" else paper_price * (1 - fallback_live_slippage)
-        fallback_live_price = round(_clamp(fallback_live_price, 0.01, 0.99), 4)
-        token_id = self._resolve_token_id(source_trade)
-        live_price, estimated_live_shares, estimated_live_notional, estimate_source, liquidity_tier, best_level_notional, top_three_depth = self._estimate_from_book(
-            token_id=token_id,
-            side=side,
-            requested_amount_usd=requested_amount_usd,
-            fallback_price=fallback_live_price,
-        )
+        live_price = round(_clamp(live_price, 0.01, 0.99), 4)
+        estimated_live_shares = round(requested_amount_usd / live_price, 6) if live_price > 0 else 0.0
         price_delta_bps = ((live_price - paper_price) / paper_price) * 10000 if paper_price > 0 else 0.0
         if side == "SELL":
             price_delta_bps *= -1
-        price_delta_cents = round((live_price - paper_price) * 100, 3)
-        execution_drag_usd = round(
-            estimated_live_shares * (live_price - paper_price if side == "BUY" else paper_price - live_price),
-            4,
-        )
         return {
             "shadow_order_id": str(uuid.uuid4()),
             "source_trade_id": source_trade.get("source_trade_id"),
@@ -369,25 +281,17 @@ class ShadowBroker:
             "market_title": source_trade.get("market_title"),
             "outcome": source_trade.get("outcome"),
             "side": side,
-            "requested_amount_usd": estimated_live_notional,
+            "requested_amount_usd": round(requested_amount_usd, 2),
             "reference_price": round(source_price, 4),
             "paper_price": paper_price,
             "estimated_live_price": live_price,
             "estimated_live_shares": estimated_live_shares,
             "price_delta_bps": round(price_delta_bps, 2),
-            "price_delta_cents": price_delta_cents,
-            "execution_drag_usd": execution_drag_usd,
             "status": "SHADOW",
             "created_at": database.utc_now(),
             "position_key": source_trade.get("position_key", ""),
             "match_strategy": source_trade.get("match_strategy", ""),
-            "token_id": token_id,
-            "estimate_source": estimate_source,
-            "liquidity_tier": liquidity_tier,
-            "best_level_notional_usd": best_level_notional,
-            "top_three_depth_usd": top_three_depth,
-            "requested_fill_amount_usd": round(requested_amount_usd, 2),
-            "fallback_slippage_bps": float(settings.get("shadow_extra_slippage_bps") or 0.0),
+            "extra_slippage_bps": float(settings.get("shadow_extra_slippage_bps") or 0.0),
         }
 
 
@@ -396,7 +300,7 @@ class CopyTradingEngine:
         self.db_path = db_path
         self.client = PolymarketClient()
         self.broker = PaperBroker()
-        self.shadow_broker = ShadowBroker(self.client)
+        self.shadow_broker = ShadowBroker()
         self._stop_event = threading.Event()
         self._thread = None
         self._lock = threading.Lock()
