@@ -260,11 +260,47 @@ class PaperBroker:
         database.update_settings({"paper_cash_balance": round(cash + proceeds, 2)}, db_path)
 
 
+class ShadowBroker:
+    def preview(self, source_trade: dict, requested_amount_usd: float, settings: dict) -> dict:
+        side = source_trade["side"]
+        source_price = max(float(source_trade.get("price") or 0.0), 0.01)
+        paper_slippage = float(settings["slippage_bps"]) / 10000.0
+        extra_live_slippage = float(settings.get("shadow_extra_slippage_bps") or 0.0) / 10000.0
+        paper_price = source_price * (1 + paper_slippage) if side == "BUY" else source_price * (1 - paper_slippage)
+        live_price = source_price * (1 + paper_slippage + extra_live_slippage) if side == "BUY" else source_price * (1 - paper_slippage - extra_live_slippage)
+        paper_price = round(_clamp(paper_price, 0.01, 0.99), 4)
+        live_price = round(_clamp(live_price, 0.01, 0.99), 4)
+        estimated_live_shares = round(requested_amount_usd / live_price, 6) if live_price > 0 else 0.0
+        price_delta_bps = ((live_price - paper_price) / paper_price) * 10000 if paper_price > 0 else 0.0
+        if side == "SELL":
+            price_delta_bps *= -1
+        return {
+            "shadow_order_id": str(uuid.uuid4()),
+            "source_trade_id": source_trade.get("source_trade_id"),
+            "market_slug": source_trade.get("market_slug"),
+            "market_title": source_trade.get("market_title"),
+            "outcome": source_trade.get("outcome"),
+            "side": side,
+            "requested_amount_usd": round(requested_amount_usd, 2),
+            "reference_price": round(source_price, 4),
+            "paper_price": paper_price,
+            "estimated_live_price": live_price,
+            "estimated_live_shares": estimated_live_shares,
+            "price_delta_bps": round(price_delta_bps, 2),
+            "status": "SHADOW",
+            "created_at": database.utc_now(),
+            "position_key": source_trade.get("position_key", ""),
+            "match_strategy": source_trade.get("match_strategy", ""),
+            "extra_slippage_bps": float(settings.get("shadow_extra_slippage_bps") or 0.0),
+        }
+
+
 class CopyTradingEngine:
     def __init__(self, db_path=DB_PATH):
         self.db_path = db_path
         self.client = PolymarketClient()
         self.broker = PaperBroker()
+        self.shadow_broker = ShadowBroker()
         self._stop_event = threading.Event()
         self._thread = None
         self._lock = threading.Lock()
@@ -448,6 +484,70 @@ class CopyTradingEngine:
             "cash_balance": portfolio["cash_balance"],
         }
 
+    def _execution_mode(self, settings: dict) -> str:
+        mode = (settings.get("execution_mode") or "paper").strip().lower()
+        return "shadow" if mode == "shadow" else "paper"
+
+    def _record_shadow_preview(self, trade: dict, requested_amount_usd: float, settings: dict) -> dict | None:
+        if self._execution_mode(settings) != "shadow":
+            return None
+        preview = self.shadow_broker.preview(trade, requested_amount_usd, settings)
+        database.insert_shadow_order(preview, self.db_path)
+        return preview
+
+    def _execute_copy_trade(self, trade: dict, decision: CopyDecision, settings: dict) -> tuple[dict, dict | None]:
+        executable_trade = dict(trade)
+        if decision.position_key:
+            executable_trade["position_key"] = decision.position_key
+        if decision.match_strategy:
+            executable_trade["match_strategy"] = decision.match_strategy
+        order = self.broker.execute(executable_trade, decision.requested_amount_usd, settings, self.db_path)
+        database.insert_copy_order(order, self.db_path)
+        shadow_preview = self._record_shadow_preview(executable_trade, decision.requested_amount_usd, settings)
+        return order, shadow_preview
+
+    def _execute_manual_trade(
+        self,
+        *,
+        market_slug: str,
+        market_title: str | None,
+        outcome: str,
+        side: str,
+        price: float,
+        requested_amount_usd: float,
+        reason: str,
+        settings: dict,
+        match_strategy: str,
+    ) -> tuple[dict, dict | None]:
+        order = self.broker.execute_manual(
+            market_slug=market_slug,
+            market_title=market_title,
+            outcome=outcome,
+            side=side,
+            price=price,
+            requested_amount_usd=requested_amount_usd,
+            reason=reason,
+            settings=settings,
+            db_path=self.db_path,
+        )
+        order["match_strategy"] = match_strategy
+        database.insert_copy_order(order, self.db_path)
+        shadow_preview = self._record_shadow_preview(
+            {
+                "source_trade_id": None,
+                "market_slug": market_slug,
+                "market_title": market_title,
+                "outcome": outcome,
+                "side": side,
+                "price": price,
+                "position_key": "",
+                "match_strategy": match_strategy,
+            },
+            requested_amount_usd,
+            settings,
+        )
+        return order, shadow_preview
+
     def _copy_trades_first(self, trades: list[dict], settings: dict, leader_wallet_value: float, source_positions: list[dict]) -> tuple[int, int]:
         copied = 0
         failed = 0
@@ -471,13 +571,11 @@ class CopyTradingEngine:
                 result["log_details"] = {"reason": result["last_error"]}
             if decision.action == "copy":
                 try:
-                    executable_trade = dict(trade)
-                    if decision.position_key:
-                        executable_trade["position_key"] = decision.position_key
-                    if decision.match_strategy:
-                        executable_trade["match_strategy"] = decision.match_strategy
-                    order = self.broker.execute(executable_trade, decision.requested_amount_usd, settings, self.db_path)
-                    database.insert_copy_order(order, self.db_path)
+                    order, shadow_preview = self._execute_copy_trade(trade, decision, settings)
+                    log_details = {"amount_usd": order["requested_amount_usd"], "price": order["executed_price"]}
+                    if shadow_preview:
+                        log_details["shadow_live_price"] = shadow_preview["estimated_live_price"]
+                        log_details["shadow_price_delta_bps"] = shadow_preview["price_delta_bps"]
                     result = {
                         "trade_id": trade["source_trade_id"],
                         "copy_status": "copied",
@@ -485,7 +583,7 @@ class CopyTradingEngine:
                         "last_error": None,
                         "log_level": "INFO",
                         "log_message": f"Copied {trade['side']} {trade['market_slug']} {trade['outcome']}.",
-                        "log_details": {"amount_usd": order["requested_amount_usd"], "price": order["executed_price"]},
+                        "log_details": log_details,
                     }
                     copied += 1
                 except Exception as exc:
@@ -543,19 +641,17 @@ class CopyTradingEngine:
                 database.log("INFO", "copy", f"Skipped {trade['source_trade_id']}.", {"reason": reason}, self.db_path)
                 continue
             try:
-                executable_trade = dict(trade)
-                if decision.position_key:
-                    executable_trade["position_key"] = decision.position_key
-                if decision.match_strategy:
-                    executable_trade["match_strategy"] = decision.match_strategy
-                order = self.broker.execute(executable_trade, decision.requested_amount_usd, settings, self.db_path)
-                database.insert_copy_order(order, self.db_path)
+                order, shadow_preview = self._execute_copy_trade(trade, decision, settings)
                 database.mark_source_trade(trade["source_trade_id"], "copied", copied_order_id=order["order_id"], db_path=self.db_path)
+                log_details = {"amount_usd": order["requested_amount_usd"], "price": order["executed_price"]}
+                if shadow_preview:
+                    log_details["shadow_live_price"] = shadow_preview["estimated_live_price"]
+                    log_details["shadow_price_delta_bps"] = shadow_preview["price_delta_bps"]
                 database.log(
                     "INFO",
                     "copy",
                     f"Copied {trade['side']} {trade['market_slug']} {trade['outcome']}.",
-                    {"amount_usd": order["requested_amount_usd"], "price": order["executed_price"]},
+                    log_details,
                     self.db_path,
                 )
                 copied += 1
@@ -654,7 +750,7 @@ class CopyTradingEngine:
             sell_amount = _round_up_to_cent(sell_amount)
             if sell_amount < MIN_BET_USD:
                 continue
-            order = self.broker.execute_manual(
+            order, _ = self._execute_manual_trade(
                 market_slug=position["market_slug"],
                 market_title=position.get("market_title"),
                 outcome=position["outcome"],
@@ -663,9 +759,8 @@ class CopyTradingEngine:
                 requested_amount_usd=sell_amount,
                 reason="Auto-sold to restore 20% cash reserve.",
                 settings=settings,
-                db_path=self.db_path,
+                match_strategy="cash-reserve-rebalance",
             )
-            database.insert_copy_order(order, self.db_path)
             sold_orders.append(order)
             remaining_needed = _round_up_to_cent(remaining_needed - order["requested_amount_usd"])
             if remaining_needed < MIN_BET_USD:
@@ -709,7 +804,7 @@ class CopyTradingEngine:
             market_value = round(float(position.get("market_value") or 0.0), 2)
             if market_value < MIN_BET_USD:
                 continue
-            order = self.broker.execute_manual(
+            self._execute_manual_trade(
                 market_slug=position["market_slug"],
                 market_title=position.get("market_title"),
                 outcome=position["outcome"],
@@ -718,10 +813,8 @@ class CopyTradingEngine:
                 requested_amount_usd=market_value,
                 reason=f"Auto-sold after reaching {int(AUTO_PROFIT_TAKE_THRESHOLD * 100)}% profit.",
                 settings=settings,
-                db_path=self.db_path,
+                match_strategy="auto-profit-take",
             )
-            order["match_strategy"] = "auto-profit-take"
-            database.insert_copy_order(order, self.db_path)
             liquidated += 1
 
         if liquidated:
@@ -750,7 +843,7 @@ class CopyTradingEngine:
             market_value = round(float(position.get("market_value") or 0.0), 2)
             if market_value < MIN_BET_USD:
                 continue
-            order = self.broker.execute_manual(
+            self._execute_manual_trade(
                 market_slug=position["market_slug"],
                 market_title=position.get("market_title"),
                 outcome=position["outcome"],
@@ -759,10 +852,8 @@ class CopyTradingEngine:
                 requested_amount_usd=market_value,
                 reason="Auto-sold fully priced position at 100c.",
                 settings=settings,
-                db_path=self.db_path,
+                match_strategy="auto-full-price-exit",
             )
-            order["match_strategy"] = "auto-full-price-exit"
-            database.insert_copy_order(order, self.db_path)
             liquidated += 1
 
         if liquidated:
@@ -853,8 +944,11 @@ class CopyTradingEngine:
                 "position_key": position.get("position_key", ""),
                 "match_strategy": "bootstrap-current-holdings",
             }
-            order = self.broker.execute(bootstrap_trade, requested_amount, settings, self.db_path)
-            database.insert_copy_order(order, self.db_path)
+            self._execute_copy_trade(
+                bootstrap_trade,
+                CopyDecision("copy", "Bootstrap position eligible.", requested_amount_usd=requested_amount),
+                settings,
+            )
             copied += 1
             buying_capacity = round(buying_capacity - requested_amount, 2)
 

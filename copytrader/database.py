@@ -153,6 +153,24 @@ def init_db(db_path: Path | str = DB_PATH) -> None:
                 raw_json TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS shadow_orders (
+                shadow_order_id TEXT PRIMARY KEY,
+                source_trade_id TEXT,
+                market_slug TEXT,
+                market_title TEXT,
+                outcome TEXT,
+                side TEXT,
+                requested_amount_usd REAL,
+                reference_price REAL,
+                paper_price REAL,
+                estimated_live_price REAL,
+                estimated_live_shares REAL,
+                price_delta_bps REAL,
+                status TEXT,
+                created_at TEXT,
+                raw_json TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS local_positions (
                 position_key TEXT PRIMARY KEY,
                 market_slug TEXT,
@@ -518,6 +536,63 @@ def list_copy_orders(limit: int = 100, db_path: Path | str = DB_PATH) -> list[di
             (limit,),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def insert_shadow_order(order: dict, db_path: Path | str = DB_PATH) -> None:
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO shadow_orders(
+                shadow_order_id, source_trade_id, market_slug, market_title, outcome, side,
+                requested_amount_usd, reference_price, paper_price, estimated_live_price,
+                estimated_live_shares, price_delta_bps, status, created_at, raw_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                order["shadow_order_id"],
+                order.get("source_trade_id"),
+                order.get("market_slug"),
+                order.get("market_title"),
+                order.get("outcome"),
+                order.get("side"),
+                order.get("requested_amount_usd"),
+                order.get("reference_price"),
+                order.get("paper_price"),
+                order.get("estimated_live_price"),
+                order.get("estimated_live_shares"),
+                order.get("price_delta_bps"),
+                order.get("status"),
+                order.get("created_at"),
+                _json(order),
+            ),
+        )
+
+
+def list_shadow_orders(limit: int = 100, db_path: Path | str = DB_PATH) -> list[dict]:
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM shadow_orders ORDER BY datetime(created_at) DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def shadow_order_summary(db_path: Path | str = DB_PATH) -> dict:
+    with connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                AVG(ABS(price_delta_bps)) AS avg_abs_price_delta_bps,
+                MAX(ABS(price_delta_bps)) AS max_abs_price_delta_bps
+            FROM shadow_orders
+            """
+        ).fetchone()
+    return {
+        "total": int(row["total"] or 0),
+        "avg_abs_price_delta_bps": round(float(row["avg_abs_price_delta_bps"] or 0.0), 2),
+        "max_abs_price_delta_bps": round(float(row["max_abs_price_delta_bps"] or 0.0), 2),
+    }
 
 
 def list_sell_match_audit(limit: int = 20, db_path: Path | str = DB_PATH) -> list[dict]:
@@ -1216,7 +1291,7 @@ def reset_runtime_state(
     db_path: Path | str = DB_PATH,
 ) -> None:
     with connect(db_path) as conn:
-        for table in ("source_trades", "source_positions", "copy_orders", "local_positions", "portfolio_snapshots", "sync_runs", "logs"):
+        for table in ("source_trades", "source_positions", "copy_orders", "shadow_orders", "local_positions", "portfolio_snapshots", "sync_runs", "logs"):
             conn.execute(f"DELETE FROM {table}")
     update_settings(
         {

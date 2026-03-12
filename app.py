@@ -407,6 +407,13 @@ def settings_modal():
                             html.Div(
                                 className="modal-row modal-row-2",
                                 children=[
+                                    field("Execution Mode", "settings-execution-mode", "paper or shadow"),
+                                    field("Shadow Extra Slippage Bps", "settings-shadow-extra-slippage-bps", "15"),
+                                ],
+                            ),
+                            html.Div(
+                                className="modal-row modal-row-2",
+                                children=[
                                     field("Paper Starting Balance", "settings-start-balance", "5000"),
                                     field("Paper Cash Balance", "settings-cash-balance", "5000"),
                                 ],
@@ -740,6 +747,7 @@ def refresh_dashboard(_, trade_tab):
     source_positions = live_positions[:10]
     source_trades = database.list_source_trades(18, DB_PATH)
     copy_orders = database.list_copy_orders(12, DB_PATH)
+    shadow_summary = database.shadow_order_summary(DB_PATH)
     sell_match_rows = database.list_sell_match_audit(12, DB_PATH)
     pending = database.list_pending_source_trades(DB_PATH)
     sync_runs = database.list_sync_runs(12, DB_PATH)
@@ -1024,6 +1032,8 @@ def refresh_dashboard(_, trade_tab):
 
     target_label = f"@{settings['target_handle']}" if settings["target_handle"] else "Wallet target"
     target_wallet = app_state.get("resolved_target_wallet") or settings["target_wallet"] or "Not resolved yet"
+    execution_mode = (settings.get("execution_mode") or "paper").strip().lower()
+    shadow_mode_active = execution_mode == "shadow"
     analysis = html.Div(
         className="analysis-stack",
         children=[
@@ -1049,12 +1059,40 @@ def refresh_dashboard(_, trade_tab):
             html.Div(
                 className="analysis-block",
                 children=[
+                    html.Div("Execution Mode", className="analysis-label"),
+                    html.Div(
+                        (
+                            f"Shadow mode: paper portfolio remains authoritative while estimated live fills are logged with +{int(settings.get('shadow_extra_slippage_bps') or 0)}bps extra slippage."
+                            if shadow_mode_active
+                            else "Paper mode only.",
+                        ),
+                        className="analysis-text",
+                    ),
+                ],
+            ),
+            html.Div(
+                className="analysis-block",
+                children=[
                     html.Div("Fast Copy Model", className="analysis-label"),
                     html.Div(
                         f"Polling every {settings['sync_interval_ms']}ms with {settings['trade_fetch_limit']} trade lookback. "
                         "Paper execution sizes buys from available cash, caps each new bet at 20% of current cash, "
                         "and refreshes dashboard marks independently every 5 seconds.",
                         className="analysis-text",
+                    ),
+                ],
+            ),
+            html.Div(
+                className="analysis-block",
+                children=[
+                    html.Div("Shadow Drift", className="analysis-label"),
+                    html.Div(
+                        (
+                            f"{shadow_summary['total']} previews logged | avg abs delta {shadow_summary['avg_abs_price_delta_bps']:.2f}bps | max abs delta {shadow_summary['max_abs_price_delta_bps']:.2f}bps"
+                            if shadow_mode_active and shadow_summary["total"]
+                            else ("No shadow previews logged yet." if shadow_mode_active else "Shadow mode disabled.")
+                        ),
+                        className="analysis-text mono",
                     ),
                 ],
             ),
@@ -1155,6 +1193,8 @@ def toggle_modal(open_clicks, close_clicks, store):
     Output("settings-target-handle", "value"),
     Output("settings-target-wallet", "value"),
     Output("settings-leader-wallet", "value"),
+    Output("settings-execution-mode", "value"),
+    Output("settings-shadow-extra-slippage-bps", "value"),
     Output("settings-max-exposure", "value"),
     Output("settings-start-balance", "value"),
     Output("settings-cash-balance", "value"),
@@ -1172,6 +1212,8 @@ def sync_modal(store, _):
         settings["target_handle"],
         settings["target_wallet"],
         settings["leader_wallet_address"],
+        settings["execution_mode"],
+        settings["shadow_extra_slippage_bps"],
         settings["max_total_exposure_usd"],
         settings["paper_starting_balance"],
         settings["paper_cash_balance"],
@@ -1188,6 +1230,8 @@ def sync_modal(store, _):
     State("settings-target-handle", "value"),
     State("settings-target-wallet", "value"),
     State("settings-leader-wallet", "value"),
+    State("settings-execution-mode", "value"),
+    State("settings-shadow-extra-slippage-bps", "value"),
     State("settings-max-exposure", "value"),
     State("settings-start-balance", "value"),
     State("settings-cash-balance", "value"),
@@ -1197,11 +1241,15 @@ def sync_modal(store, _):
     State("settings-copy-sells", "value"),
     prevent_initial_call=True,
 )
-def save_settings(_, target_handle, target_wallet, leader_wallet, max_exposure, start_balance, cash_balance, slippage_bps, sync_interval, trade_limit, copy_sells):
+def save_settings(_, target_handle, target_wallet, leader_wallet, execution_mode, shadow_extra_slippage_bps, max_exposure, start_balance, cash_balance, slippage_bps, sync_interval, trade_limit, copy_sells):
+    normalized_mode = (execution_mode or "paper").strip().lower()
+    normalized_mode = "shadow" if normalized_mode == "shadow" else "paper"
     updates = {
         "target_handle": (target_handle or "").strip().lstrip("@"),
         "target_wallet": (target_wallet or "").strip(),
         "leader_wallet_address": (leader_wallet or "").strip(),
+        "execution_mode": normalized_mode,
+        "shadow_extra_slippage_bps": int(float(shadow_extra_slippage_bps or 0)),
         "max_total_exposure_usd": float(max_exposure or 0),
         "paper_starting_balance": float(start_balance or 0),
         "paper_cash_balance": float(cash_balance or 0),
