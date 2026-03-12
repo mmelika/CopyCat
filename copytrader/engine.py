@@ -170,11 +170,19 @@ class PaperBroker:
         settings: dict,
         db_path=DB_PATH,
     ) -> dict:
-        source_price = max(float(price or 0.0), 0.01)
+        requested_amount_usd = round(float(requested_amount_usd or 0.0), 2)
+        source_price = max(float(price or 0.0), 0.0)
         slippage = float(settings["slippage_bps"]) / 10000.0
-        executed_price = source_price * (1 + slippage) if side == "BUY" else source_price * (1 - slippage)
-        executed_price = _clamp(executed_price, 0.01, 0.99)
-        shares = round(requested_amount_usd / executed_price, 6)
+        if side == "SELL" and requested_amount_usd <= 0 and source_price <= 0:
+            executed_price = 0.0
+            position_key = f"{market_slug}:{outcome}"
+            position = database.get_local_position(position_key, db_path)
+            shares = round(float(position["shares"]) if position else 0.0, 6)
+        else:
+            source_price = max(source_price, 0.01)
+            executed_price = source_price * (1 + slippage) if side == "BUY" else source_price * (1 - slippage)
+            executed_price = _clamp(executed_price, 0.01, 0.99)
+            shares = round(requested_amount_usd / executed_price, 6)
         order = {
             "order_id": str(uuid.uuid4()),
             "source_trade_id": None,
@@ -182,7 +190,7 @@ class PaperBroker:
             "market_title": market_title,
             "outcome": outcome,
             "side": side,
-            "requested_amount_usd": round(requested_amount_usd, 2),
+            "requested_amount_usd": requested_amount_usd,
             "executed_price": round(executed_price, 4),
             "shares": shares,
             "status": "FILLED",
@@ -482,6 +490,10 @@ class CopyTradingEngine:
             failed += backlog_failed
             copied += bootstrap_copied
             database.refresh_local_position_market_values(self.db_path, freeze_recent_seconds=FRESH_FILL_MARK_GRACE_SECONDS, source_positions=positions)
+            auto_zero_value_exits = self._liquidate_zero_value_positions(settings, positions)
+            copied += auto_zero_value_exits
+            if auto_zero_value_exits:
+                database.refresh_local_position_market_values(self.db_path, source_positions=positions)
             auto_profit_takes = self._liquidate_positions_at_profit_target(settings, positions)
             copied += auto_profit_takes
             if auto_profit_takes:
@@ -944,6 +956,42 @@ class CopyTradingEngine:
                 "rebalance",
                 "Auto-sold fully priced paper positions.",
                 {"positions_liquidated": liquidated, "threshold_price": FULLY_PRICED_EXIT_THRESHOLD},
+                self.db_path,
+            )
+        return liquidated
+
+    def _liquidate_zero_value_positions(self, settings: dict, source_positions: list[dict]) -> int:
+        positions = [
+            row
+            for row in database.list_local_positions_marked(self.db_path, source_positions=source_positions)
+            if float(row.get("shares") or 0.0) > 0
+            and float(row.get("current_price") or 0.0) <= 0.0001
+            and float(row.get("market_value") or 0.0) <= 0.01
+        ]
+        if not positions:
+            return 0
+
+        liquidated = 0
+        for position in positions:
+            self._execute_manual_trade(
+                market_slug=position["market_slug"],
+                market_title=position.get("market_title"),
+                outcome=position["outcome"],
+                side="SELL",
+                price=0.0,
+                requested_amount_usd=0.0,
+                reason="Auto-closed resolved losing position at 0c.",
+                settings=settings,
+                match_strategy="auto-zero-value-exit",
+            )
+            liquidated += 1
+
+        if liquidated:
+            database.log(
+                "INFO",
+                "rebalance",
+                "Auto-closed zero-value paper positions.",
+                {"positions_liquidated": liquidated},
                 self.db_path,
             )
         return liquidated
