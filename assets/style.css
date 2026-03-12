@@ -620,6 +620,28 @@ tbody td {
   overflow-x: auto;
 }
 
+.compare-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.compare-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.compare-metric {
+  padding: 14px 15px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(154, 188, 220, 0.10);
+}
+
+.compare-table {
+  overflow-x: auto;
+}
+
 .portfolio-holding-row {
   display: flex;
   justify-content: space-between;
@@ -962,7 +984,8 @@ tbody td {
   .stats-row,
   .dashboard-grid,
   .modal-row,
-  .market-strip-grid {
+  .market-strip-grid,
+  .compare-summary {
     grid-template-columns: 1fr;
   }
 

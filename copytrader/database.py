@@ -193,6 +193,15 @@ def init_db(db_path: Path | str = DB_PATH) -> None:
                 positions_count INTEGER NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS shadow_portfolio_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT NOT NULL,
+                cash_balance REAL NOT NULL,
+                gross_exposure REAL NOT NULL,
+                net_value REAL NOT NULL,
+                positions_count INTEGER NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS sync_runs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 started_at TEXT NOT NULL,
@@ -236,6 +245,15 @@ def seed_defaults(db_path: Path | str = DB_PATH) -> None:
     if not list_portfolio_snapshots(db_path, 1):
         settings = get_settings(db_path)
         snapshot_portfolio(
+            settings["paper_cash_balance"],
+            0.0,
+            settings["paper_cash_balance"],
+            0,
+            db_path,
+        )
+    if not list_shadow_portfolio_snapshots(db_path, 1):
+        settings = get_settings(db_path)
+        snapshot_shadow_portfolio(
             settings["paper_cash_balance"],
             0.0,
             settings["paper_cash_balance"],
@@ -635,6 +653,18 @@ def list_all_copy_orders(db_path: Path | str = DB_PATH) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def list_all_shadow_orders(db_path: Path | str = DB_PATH) -> list[dict]:
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM shadow_orders
+            WHERE status='SHADOW'
+            ORDER BY datetime(created_at) ASC, shadow_order_id ASC
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def get_latest_copy_order_for_position(position_key: str, db_path: Path | str = DB_PATH) -> dict | None:
     market_slug, _, outcome = position_key.partition(":")
     with connect(db_path) as conn:
@@ -722,11 +752,41 @@ def snapshot_portfolio(
         )
 
 
+def snapshot_shadow_portfolio(
+    cash_balance: float,
+    gross_exposure: float,
+    net_value: float,
+    positions_count: int,
+    db_path: Path | str = DB_PATH,
+) -> None:
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO shadow_portfolio_snapshots(ts, cash_balance, gross_exposure, net_value, positions_count)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (utc_now(), cash_balance, gross_exposure, net_value, positions_count),
+        )
+
+
 def list_portfolio_snapshots(db_path: Path | str = DB_PATH, limit: int = 120) -> list[dict]:
     with connect(db_path) as conn:
         rows = conn.execute(
             """
             SELECT * FROM portfolio_snapshots
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in reversed(rows)]
+
+
+def list_shadow_portfolio_snapshots(db_path: Path | str = DB_PATH, limit: int = 120) -> list[dict]:
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM shadow_portfolio_snapshots
             ORDER BY id DESC
             LIMIT ?
             """,
@@ -744,6 +804,34 @@ def portfolio_totals(db_path: Path | str = DB_PATH, source_positions: list[dict]
     realized_pnl = round(sum(row["realized_pnl"] for row in positions), 2)
     net_value = round(cash_balance + gross_exposure, 2)
     starting_balance = float(settings["paper_starting_balance"])
+    total_gain = round(net_value - starting_balance, 2)
+    total_gain_pct = round((total_gain / starting_balance) * 100, 2) if starting_balance else 0.0
+    return {
+        "cash_balance": cash_balance,
+        "gross_exposure": gross_exposure,
+        "net_value": net_value,
+        "positions_count": len(positions),
+        "realized_pnl": realized_pnl,
+        "starting_balance": starting_balance,
+        "total_gain": total_gain,
+        "total_gain_pct": total_gain_pct,
+    }
+
+
+def shadow_portfolio_totals(db_path: Path | str = DB_PATH, source_positions: list[dict] | None = None) -> dict:
+    settings = get_settings(db_path)
+    analytics = shadow_trade_analytics(db_path, source_positions=source_positions)
+    positions = analytics["open_positions"]
+    gross_exposure = round(sum(float(row["market_value"]) for row in positions), 2)
+    starting_balance = float(settings["paper_starting_balance"])
+    total_buy_notional = round(
+        sum(float(order.get("requested_amount_usd") or 0.0) for order in list_all_shadow_orders(db_path) if order.get("side") == "BUY"),
+        2,
+    )
+    total_sell_proceeds = round(sum(float(row.get("proceeds") or 0.0) for row in analytics["closed_trades"]), 2)
+    cash_balance = round(starting_balance - total_buy_notional + total_sell_proceeds, 2)
+    realized_pnl = round(sum(float(row.get("pnl") or 0.0) for row in analytics["closed_trades"]), 2)
+    net_value = round(cash_balance + gross_exposure, 2)
     total_gain = round(net_value - starting_balance, 2)
     total_gain_pct = round((total_gain / starting_balance) * 100, 2) if starting_balance else 0.0
     return {
@@ -891,12 +979,14 @@ def refresh_local_position_market_values(db_path: Path | str = DB_PATH, freeze_r
     return updated
 
 
-def trade_analytics(db_path: Path | str = DB_PATH, source_positions: list[dict] | None = None) -> dict:
-    orders = list_all_copy_orders(db_path)
-    local_positions_by_key = {
-        row["position_key"]: row
-        for row in get_local_positions(db_path)
-    }
+def _trade_analytics_from_orders(
+    orders: list[dict],
+    *,
+    source_positions: list[dict] | None,
+    db_path: Path | str,
+    local_positions_by_key: dict[str, dict] | None = None,
+) -> dict:
+    local_positions_by_key = local_positions_by_key or {}
     open_lots: list[dict] = []
     closed_trades: list[dict] = []
     daily_realized: dict[str, float] = {}
@@ -1054,6 +1144,37 @@ def trade_analytics(db_path: Path | str = DB_PATH, source_positions: list[dict] 
         "closed_trades": closed_trades,
         "daily_realized": daily_rows,
     }
+
+
+def trade_analytics(db_path: Path | str = DB_PATH, source_positions: list[dict] | None = None) -> dict:
+    return _trade_analytics_from_orders(
+        list_all_copy_orders(db_path),
+        source_positions=source_positions,
+        db_path=db_path,
+        local_positions_by_key={row["position_key"]: row for row in get_local_positions(db_path)},
+    )
+
+
+def shadow_trade_analytics(db_path: Path | str = DB_PATH, source_positions: list[dict] | None = None) -> dict:
+    shadow_orders = [
+        {
+            "market_slug": row.get("market_slug"),
+            "market_title": row.get("market_title"),
+            "outcome": row.get("outcome"),
+            "side": row.get("side"),
+            "requested_amount_usd": row.get("requested_amount_usd"),
+            "executed_price": row.get("estimated_live_price"),
+            "shares": row.get("estimated_live_shares"),
+            "created_at": row.get("created_at"),
+        }
+        for row in list_all_shadow_orders(db_path)
+    ]
+    return _trade_analytics_from_orders(
+        shadow_orders,
+        source_positions=source_positions,
+        db_path=db_path,
+        local_positions_by_key=None,
+    )
 
 
 def profit_verification(db_path: Path | str = DB_PATH) -> dict:
@@ -1272,7 +1393,14 @@ def live_profit_verification(source_positions: list[dict], db_path: Path | str =
 
 
 def daily_portfolio_performance(db_path: Path | str = DB_PATH) -> list[dict]:
-    snapshots = list_portfolio_snapshots(db_path, limit=1000)
+    return _daily_portfolio_performance(list_portfolio_snapshots(db_path, limit=1000))
+
+
+def shadow_daily_portfolio_performance(db_path: Path | str = DB_PATH) -> list[dict]:
+    return _daily_portfolio_performance(list_shadow_portfolio_snapshots(db_path, limit=1000))
+
+
+def _daily_portfolio_performance(snapshots: list[dict]) -> list[dict]:
     by_day: dict[str, dict] = {}
     for snapshot in snapshots:
         day = pacific_day(snapshot.get("ts") or "")
@@ -1300,7 +1428,7 @@ def reset_runtime_state(
     db_path: Path | str = DB_PATH,
 ) -> None:
     with connect(db_path) as conn:
-        for table in ("source_trades", "source_positions", "copy_orders", "shadow_orders", "local_positions", "portfolio_snapshots", "sync_runs", "logs"):
+        for table in ("source_trades", "source_positions", "copy_orders", "shadow_orders", "local_positions", "portfolio_snapshots", "shadow_portfolio_snapshots", "sync_runs", "logs"):
             conn.execute(f"DELETE FROM {table}")
     update_settings(
         {
@@ -1319,6 +1447,7 @@ def reset_runtime_state(
     set_app_state("leader_wallet_updated_at", "", db_path)
     set_app_state("bootstrap_positions_done_at", "", db_path)
     snapshot_portfolio(starting_balance, 0.0, starting_balance, 0, db_path)
+    snapshot_shadow_portfolio(starting_balance, 0.0, starting_balance, 0, db_path)
     log(
         "INFO",
         "reset",

@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 import dash
 import plotly.graph_objects as go
 from flask import jsonify
-from dash import Input, Output, State, callback_context, dcc, html
+from dash import Input, Output, State, callback_context, dcc, html, no_update
 
 from copytrader import database
 from copytrader.config import DB_PATH
@@ -540,7 +540,7 @@ app.layout = html.Div(
                 html.Div(
                     className="stats-row",
                     children=[
-                        stat_card("Tracked Trader", "stat-target", "stat-target-sub"),
+                        stat_card("Execution Model", "stat-target", "stat-target-sub"),
                         stat_card("Pending Copies", "stat-pending", "stat-pending-sub"),
                         stat_card("Active Positions Value", "stat-copied-notional", "stat-copied-sub"),
                         stat_card("Net Liquidation Value", "stat-net-value", "stat-net-sub", "stat-net-chip"),
@@ -565,7 +565,7 @@ app.layout = html.Div(
                                 section("Target Trade Feed", "copied-trades-table", "copied-trades-badge"),
                                 section("Sell Match Audit", "sell-match-table", "sell-match-badge"),
                                 trade_views(),
-                                section("Live Analysis", "analysis-panel"),
+                                section("Execution Compare", "analysis-panel"),
                                 section("Engine Log", "engine-log-table", "engine-log-badge"),
                             ],
                         ),
@@ -593,7 +593,9 @@ def render_table(headers, rows):
 
 
 def portfolio_chart(range_key: str):
+    settings = database.get_settings(DB_PATH)
     snapshots = database.list_portfolio_snapshots(DB_PATH, limit=720)
+    shadow_snapshots = database.list_shadow_portfolio_snapshots(DB_PATH, limit=720)
     if not snapshots:
         snapshots = [{"ts": datetime.now(timezone.utc).isoformat(), "net_value": 0.0}]
 
@@ -608,6 +610,9 @@ def portfolio_chart(range_key: str):
         filtered = [row for row in snapshots if (parse_utc(row["ts"]) or end_time) >= start_time]
         if filtered:
             snapshots = filtered
+        shadow_filtered = [row for row in shadow_snapshots if (parse_utc(row["ts"]) or end_time) >= start_time]
+        if shadow_filtered:
+            shadow_snapshots = shadow_filtered
 
     baseline = float(snapshots[0]["net_value"] or 0.0)
     current_value = float(snapshots[-1]["net_value"] or 0.0)
@@ -631,6 +636,21 @@ def portfolio_chart(range_key: str):
             showlegend=False,
         )
     )
+    shadow_mode_active = (settings.get("execution_mode") or "paper").strip().lower() == "shadow"
+    if shadow_mode_active and shadow_snapshots:
+        shadow_x_values = [to_pacific(row["ts"]).strftime("%b %d %I:%M %p") if to_pacific(row["ts"]) else row["ts"] for row in shadow_snapshots]
+        shadow_y_values = [float(row["net_value"] or 0.0) for row in shadow_snapshots]
+        figure.add_trace(
+            go.Scatter(
+                x=shadow_x_values,
+                y=shadow_y_values,
+                mode="lines",
+                line={"color": "#ffbf47", "width": 2.5, "dash": "dot"},
+                hovertemplate="Shadow %{x}<br>%{y:$,.2f}<extra></extra>",
+                name="Shadow",
+                showlegend=False,
+            )
+        )
     figure.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
@@ -705,6 +725,7 @@ def set_portfolio_range(_, __, ___, ____, current_range):
 )
 def refresh_portfolio_chart(_, range_key):
     selected_range = range_key or "1D"
+    settings = database.get_settings(DB_PATH)
     snapshots = database.list_portfolio_snapshots(DB_PATH, limit=720)
     if not snapshots:
         amount_text = fmt_signed_currency(0.0)
@@ -731,13 +752,16 @@ def refresh_portfolio_chart(_, range_key):
         "1M": "Past Month",
         "ALL": "All Time",
     }
+    subtitle = subtitle_map.get(selected_range, "Past Day")
+    if (settings.get("execution_mode") or "paper").strip().lower() == "shadow":
+        subtitle = f"{subtitle} | solid paper, dotted shadow"
     button_classes = []
     for key in ("1D", "1W", "1M", "ALL"):
         button_classes.append("portfolio-range-btn portfolio-range-btn-active" if key == selected_range else "portfolio-range-btn")
     return (
         portfolio_chart(selected_range),
         amount_text,
-        subtitle_map.get(selected_range, "Past Day"),
+        subtitle,
         *button_classes,
     )
 
@@ -798,13 +822,16 @@ def refresh_dashboard(_, trade_tab):
     source_positions = live_positions[:10]
     source_trades = database.list_source_trades(18, DB_PATH)
     copy_orders = database.list_copy_orders(12, DB_PATH)
+    shadow_orders = database.list_shadow_orders(8, DB_PATH)
     shadow_summary = database.shadow_order_summary(DB_PATH)
     sell_match_rows = database.list_sell_match_audit(12, DB_PATH)
     pending = database.list_pending_source_trades(DB_PATH)
     sync_runs = database.list_sync_runs(12, DB_PATH)
     logs = database.list_logs(14, DB_PATH)
     portfolio = database.portfolio_totals(DB_PATH, live_positions)
+    shadow_portfolio = database.shadow_portfolio_totals(DB_PATH, live_positions)
     analytics = database.trade_analytics(DB_PATH, live_positions)
+    shadow_analytics = database.shadow_trade_analytics(DB_PATH, live_positions)
     daily_performance = database.daily_portfolio_performance(DB_PATH)[:12]
     daily_realized_map = {row["date"]: row["realized_pnl"] for row in analytics["daily_realized"]}
     effective_exposure_cap = _effective_exposure_cap(settings, portfolio)
@@ -1092,6 +1119,92 @@ def refresh_dashboard(_, trade_tab):
         if shadow_mode_active
         else "Paper simulation"
     )
+    execution_card_value = "Shadow On" if shadow_mode_active else "Paper Only"
+    execution_card_sub = (
+        f"Parallel live-like portfolio vs paper | {target_label}"
+        if shadow_mode_active
+        else f"No shadow portfolio active | {target_label}"
+    )
+    shadow_delta = round(float(shadow_portfolio["net_value"]) - float(portfolio["net_value"]), 2)
+    shadow_delta_text = fmt_signed_currency(shadow_delta)
+    shadow_tone = signed_class(shadow_delta)
+    shadow_has_history = shadow_mode_active and shadow_summary["total"] > 0
+    shadow_net_display = fmt_currency(shadow_portfolio["net_value"]) if shadow_has_history else ("Starting flat" if shadow_mode_active else "Disabled")
+    shadow_positions_sub = (
+        f"{shadow_portfolio['positions_count']} open positions"
+        if shadow_has_history
+        else ("Waiting for shadow fills" if shadow_mode_active else "Turn on shadow mode in Settings")
+    )
+    shadow_fill_rows = [
+        [
+            fmt_pacific_time(row["created_at"]),
+            short_text(row["market_title"], 20),
+            row["side"],
+            fmt_number(row["paper_price"], 3),
+            fmt_number(row["estimated_live_price"], 3),
+            f"{float(row['price_delta_bps']):+.1f}bps",
+        ]
+        for row in shadow_orders[:6]
+    ] or [["No shadow fills yet", "-", "-", "-", "-", "-"]]
+    compare_panel = html.Div(
+        className="compare-stack",
+        children=[
+            html.Div(
+                className="compare-summary",
+                children=[
+                    html.Div(
+                        className="compare-metric",
+                        children=[
+                            html.Div("Paper Net", className="realized-metric-label"),
+                            html.Div(fmt_currency(portfolio["net_value"]), className="realized-metric-value"),
+                            html.Div(f"{portfolio['positions_count']} open positions", className="realized-metric-sub"),
+                        ],
+                    ),
+                    html.Div(
+                        className="compare-metric",
+                        children=[
+                            html.Div("Shadow Net", className="realized-metric-label"),
+                            html.Div(shadow_net_display, className="realized-metric-value"),
+                            html.Div(shadow_positions_sub, className="realized-metric-sub"),
+                        ],
+                    ),
+                    html.Div(
+                        className="compare-metric",
+                        children=[
+                            html.Div("Shadow Delta", className="realized-metric-label"),
+                            html.Div(shadow_delta_text, className=f"realized-metric-value {shadow_tone}"),
+                            html.Div("Shadow net minus paper net", className="realized-metric-sub"),
+                        ],
+                    ),
+                    html.Div(
+                        className="compare-metric",
+                        children=[
+                            html.Div("Avg Fill Drift", className="realized-metric-label"),
+                            html.Div(
+                                f"{shadow_summary['avg_abs_price_delta_bps']:.1f}bps" if shadow_has_history else "-",
+                                className="realized-metric-value",
+                            ),
+                            html.Div(
+                                (
+                                    f"{shadow_summary['total']} shadow fills tracked"
+                                    if shadow_has_history
+                                    else "Enable shadow mode to track a parallel portfolio"
+                                ),
+                                className="realized-metric-sub",
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+            html.Div(
+                className="compare-table",
+                children=render_table(
+                    ["Time (PT)", "Market", "Side", "Paper Px", "Shadow Px", "Delta"],
+                    shadow_fill_rows,
+                ),
+            ),
+        ],
+    )
     analysis = html.Div(
         className="analysis-stack",
         children=[
@@ -1117,50 +1230,17 @@ def refresh_dashboard(_, trade_tab):
             html.Div(
                 className="analysis-block",
                 children=[
-                    html.Div("Execution Mode", className="analysis-label"),
+                    html.Div("Portfolio Compare", className="analysis-label"),
+                    compare_panel,
+                ],
+            ),
+            html.Div(
+                className="analysis-block",
+                children=[
+                    html.Div("Engine Context", className="analysis-label"),
                     html.Div(
-                        (
-                            f"Shadow mode: paper portfolio remains authoritative while estimated live fills are logged with +{int(settings.get('shadow_extra_slippage_bps') or 0)}bps extra slippage."
-                            if shadow_mode_active
-                            else "Paper mode only.",
-                        ),
+                        f"Polling every {settings['sync_interval_ms']}ms with {settings['trade_fetch_limit']} recent source trades. Leader NAV {fmt_currency(float(app_state.get('leader_wallet_value') or 0.0))}.",
                         className="analysis-text",
-                    ),
-                ],
-            ),
-            html.Div(
-                className="analysis-block",
-                children=[
-                    html.Div("Fast Copy Model", className="analysis-label"),
-                    html.Div(
-                        f"Polling every {settings['sync_interval_ms']}ms with {settings['trade_fetch_limit']} trade lookback. "
-                        "Paper execution sizes buys from available cash, caps each new bet at 20% of current cash, "
-                        "and refreshes dashboard marks independently every 5 seconds.",
-                        className="analysis-text",
-                    ),
-                ],
-            ),
-            html.Div(
-                className="analysis-block",
-                children=[
-                    html.Div("Shadow Drift", className="analysis-label"),
-                    html.Div(
-                        (
-                            f"{shadow_summary['total']} previews logged | avg abs delta {shadow_summary['avg_abs_price_delta_bps']:.2f}bps | max abs delta {shadow_summary['max_abs_price_delta_bps']:.2f}bps"
-                            if shadow_mode_active and shadow_summary["total"]
-                            else ("No shadow previews logged yet." if shadow_mode_active else "Shadow mode disabled.")
-                        ),
-                        className="analysis-text mono",
-                    ),
-                ],
-            ),
-            html.Div(
-                className="analysis-block",
-                children=[
-                    html.Div("Leader Wallet Value", className="analysis-label"),
-                    html.Div(
-                        fmt_currency(float(app_state.get("leader_wallet_value") or 0.0)),
-                        className="analysis-text mono",
                     ),
                 ],
             ),
@@ -1200,12 +1280,12 @@ def refresh_dashboard(_, trade_tab):
         f"{settings['sync_interval_ms']} ms",
         fmt_currency(effective_exposure_cap),
         fmt_currency(float(app_state.get("leader_wallet_value") or 0.0)),
-        target_label,
-        target_wallet,
+        execution_card_value,
+        execution_card_sub,
         str(len(pending)),
-        f"{len(copy_orders)} total copied orders",
+        f"{len(copy_orders)} paper orders | {len(shadow_orders)} recent shadow rows" if shadow_mode_active else f"{len(copy_orders)} total copied orders",
         fmt_currency(active_positions_value),
-        f"{portfolio['positions_count']} active positions | updated every 5s",
+        f"{portfolio['positions_count']} paper positions" + (f" | shadow {len(shadow_analytics['open_positions'])}" if shadow_mode_active else ""),
         fmt_currency(portfolio["net_value"]),
         net_chip_text,
         f"stat-chip {signed_class(net_gain)}",
@@ -1268,6 +1348,22 @@ def toggle_modal(open_clicks, close_clicks, store):
 )
 def sync_modal(store, _):
     settings = database.get_settings(DB_PATH)
+    if store["open"] and callback_context.triggered_id == "refresh-interval":
+        return (
+            "modal-overlay",
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+        )
     return (
         "modal-overlay" if store["open"] else "modal-overlay hidden",
         settings["target_handle"],

@@ -430,6 +430,14 @@ class CopyTradingEngine:
                 portfolio["positions_count"],
                 self.db_path,
             )
+            shadow_portfolio = database.shadow_portfolio_totals(self.db_path, positions)
+            database.snapshot_shadow_portfolio(
+                shadow_portfolio["cash_balance"],
+                shadow_portfolio["gross_exposure"],
+                shadow_portfolio["net_value"],
+                shadow_portfolio["positions_count"],
+                self.db_path,
+            )
             database.set_app_state("resolved_target_wallet", profile["wallet"], self.db_path)
             database.set_app_state("leader_wallet_value", f"{leader_wallet_value:.8f}", self.db_path)
             database.set_app_state("leader_wallet_updated_at", database.utc_now(), self.db_path)
