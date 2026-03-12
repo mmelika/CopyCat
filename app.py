@@ -177,6 +177,25 @@ def signed_class(value) -> str:
     return "text-muted"
 
 
+def shadow_source_label(value: str) -> str:
+    mapping = {
+        "book-filled": "Book Filled",
+        "book-partial": "Book Partial",
+        "fallback-reference": "Fallback Ref",
+    }
+    return mapping.get((value or "").strip(), value or "-")
+
+
+def shadow_liquidity_label(value: str) -> str:
+    mapping = {
+        "high": "High",
+        "medium": "Medium",
+        "low": "Low",
+        "unknown": "Unknown",
+    }
+    return mapping.get((value or "").strip(), value or "-")
+
+
 def short_text(value, limit: int) -> str:
     return (value or "")[:limit]
 
@@ -1182,14 +1201,26 @@ def refresh_dashboard(_, trade_tab, view_key):
             fmt_pacific_time(row["created_at"]),
             short_text(row["market_title"], 20),
             row["side"],
+            shadow_source_label(row.get("estimate_source")),
+            shadow_liquidity_label(row.get("liquidity_tier")),
             fmt_number(row["paper_price"], 3),
             fmt_number(row["estimated_live_price"], 3),
-            f"{float(row['price_delta_bps']):+.1f}bps",
+            f"{float(row.get('price_delta_cents') or 0.0):+.2f}c",
+            fmt_signed_currency(float(row.get("execution_drag_usd") or 0.0)),
         ]
         for row in shadow_orders[:6]
-    ] or [["No shadow fills yet", "-", "-", "-", "-", "-"]]
+    ] or [["No shadow fills yet", "-", "-", "-", "-", "-", "-", "-", "-"]]
     compare_table_rows = shadow_fill_rows
-    compare_headers = ["Time (PT)", "Market", "Side", "Paper Px", "Shadow Px", "Delta"]
+    compare_headers = ["Time (PT)", "Market", "Side", "Source", "Liquidity", "Paper Px", "Shadow Px", "Delta", "Drag"]
+    shadow_status_counts = {"book-filled": 0, "book-partial": 0, "fallback-reference": 0}
+    shadow_liquidity_counts = {"high": 0, "medium": 0, "low": 0}
+    for row in shadow_orders:
+        status_key = (row.get("estimate_source") or "").strip()
+        if status_key in shadow_status_counts:
+            shadow_status_counts[status_key] += 1
+        liquidity_key = (row.get("liquidity_tier") or "").strip()
+        if liquidity_key in shadow_liquidity_counts:
+            shadow_liquidity_counts[liquidity_key] += 1
     if selected_view == "paper":
         compare_headers = ["Metric", "Value"]
         compare_table_rows = [
@@ -1202,7 +1233,14 @@ def refresh_dashboard(_, trade_tab, view_key):
         compare_table_rows = [
             ["Shadow Net", shadow_net_display],
             ["Shadow Positions", shadow_positions_sub],
-            ["Avg Fill Drift", f"{shadow_summary['avg_abs_price_delta_bps']:.1f}bps" if shadow_has_history else "-"],
+            ["Avg Fill Drift", f"{shadow_summary['avg_abs_price_delta_cents']:.2f}c" if shadow_has_history else "-"],
+            ["Total Drag", fmt_signed_currency(float(shadow_summary["total_execution_drag_usd"])) if shadow_has_history else "-"],
+            ["High Liquidity", str(shadow_liquidity_counts["high"])],
+            ["Medium Liquidity", str(shadow_liquidity_counts["medium"])],
+            ["Low Liquidity", str(shadow_liquidity_counts["low"])],
+            ["Book Filled", str(shadow_status_counts["book-filled"])],
+            ["Book Partial", str(shadow_status_counts["book-partial"])],
+            ["Fallback Ref", str(shadow_status_counts["fallback-reference"])],
         ]
     compare_panel = html.Div(
         className="compare-stack",
@@ -1239,12 +1277,12 @@ def refresh_dashboard(_, trade_tab, view_key):
                         children=[
                             html.Div("Avg Fill Drift", className="realized-metric-label"),
                             html.Div(
-                                f"{shadow_summary['avg_abs_price_delta_bps']:.1f}bps" if shadow_has_history else "-",
+                                f"{shadow_summary['avg_abs_price_delta_cents']:.2f}c" if shadow_has_history else "-",
                                 className="realized-metric-value",
                             ),
                             html.Div(
                                 (
-                                    f"{shadow_summary['total']} shadow fills tracked"
+                                    f"{shadow_summary['total']} shadow fills | drag {fmt_signed_currency(float(shadow_summary['total_execution_drag_usd']))}"
                                     if shadow_has_history
                                     else "Enable shadow mode to track a parallel portfolio"
                                 ),

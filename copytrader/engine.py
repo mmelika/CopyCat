@@ -279,12 +279,38 @@ class ShadowBroker:
         )
         return (match or {}).get("token_id", "")
 
-    def _estimate_from_book(self, *, token_id: str, side: str, requested_amount_usd: float, fallback_price: float) -> tuple[float, float, float, str]:
+    def _classify_liquidity_tier(self, levels: list[dict], requested_amount_usd: float) -> tuple[str, float, float]:
+        if not levels:
+            return "unknown", 0.0, 0.0
+        best_price = _clamp(float(levels[0].get("price") or 0.0), 0.01, 0.99)
+        best_size = max(float(levels[0].get("size") or 0.0), 0.0)
+        best_level_notional = round(best_price * best_size, 2)
+        top_three_depth = 0.0
+        for level in levels[:3]:
+            price = _clamp(float(level.get("price") or 0.0), 0.01, 0.99)
+            size = max(float(level.get("size") or 0.0), 0.0)
+            top_three_depth += price * size
+        top_three_depth = round(top_three_depth, 2)
+
+        if best_level_notional >= requested_amount_usd and top_three_depth >= requested_amount_usd * 2:
+            return "high", best_level_notional, top_three_depth
+        if top_three_depth >= requested_amount_usd or best_level_notional >= max(requested_amount_usd * 0.25, 5.0):
+            return "medium", best_level_notional, top_three_depth
+        return "low", best_level_notional, top_three_depth
+
+    def _estimate_from_book(self, *, token_id: str, side: str, requested_amount_usd: float, fallback_price: float) -> tuple[float, float, float, str, str, float, float]:
         book = self.client.fetch_order_book(token_id)
         levels = book.get("asks") if side == "BUY" else book.get("bids")
         if not isinstance(levels, list) or not levels:
             fallback_shares = round(requested_amount_usd / fallback_price, 6) if fallback_price > 0 else 0.0
-            return fallback_price, fallback_shares, round(requested_amount_usd, 2), "fallback-reference"
+            return fallback_price, fallback_shares, round(requested_amount_usd, 2), "fallback-reference", "low", 0.0, 0.0
+
+        liquidity_tier, best_level_notional, top_three_depth = self._classify_liquidity_tier(levels, requested_amount_usd)
+
+        if liquidity_tier == "high":
+            best_price = _clamp(float(levels[0].get("price") or 0.0), 0.01, 0.99)
+            filled_shares = round(requested_amount_usd / best_price, 6) if best_price > 0 else 0.0
+            return best_price, filled_shares, round(requested_amount_usd, 2), "book-filled", liquidity_tier, best_level_notional, top_three_depth
 
         spent = 0.0
         filled_shares = 0.0
@@ -305,12 +331,12 @@ class ShadowBroker:
 
         if filled_shares <= 0:
             fallback_shares = round(requested_amount_usd / fallback_price, 6) if fallback_price > 0 else 0.0
-            return fallback_price, fallback_shares, round(requested_amount_usd, 2), "fallback-reference"
+            return fallback_price, fallback_shares, round(requested_amount_usd, 2), "fallback-reference", liquidity_tier, best_level_notional, top_three_depth
 
         avg_price = round(spent / filled_shares, 4)
         actual_notional = round(spent, 2)
         status = "book-partial" if actual_notional + 0.009 < round(requested_amount_usd, 2) else "book-filled"
-        return avg_price, round(filled_shares, 6), actual_notional, status
+        return avg_price, round(filled_shares, 6), actual_notional, status, liquidity_tier, best_level_notional, top_three_depth
 
     def preview(self, source_trade: dict, requested_amount_usd: float, settings: dict) -> dict:
         side = source_trade["side"]
@@ -322,7 +348,7 @@ class ShadowBroker:
         fallback_live_price = paper_price * (1 + fallback_live_slippage) if side == "BUY" else paper_price * (1 - fallback_live_slippage)
         fallback_live_price = round(_clamp(fallback_live_price, 0.01, 0.99), 4)
         token_id = self._resolve_token_id(source_trade)
-        live_price, estimated_live_shares, estimated_live_notional, estimate_source = self._estimate_from_book(
+        live_price, estimated_live_shares, estimated_live_notional, estimate_source, liquidity_tier, best_level_notional, top_three_depth = self._estimate_from_book(
             token_id=token_id,
             side=side,
             requested_amount_usd=requested_amount_usd,
@@ -331,6 +357,11 @@ class ShadowBroker:
         price_delta_bps = ((live_price - paper_price) / paper_price) * 10000 if paper_price > 0 else 0.0
         if side == "SELL":
             price_delta_bps *= -1
+        price_delta_cents = round((live_price - paper_price) * 100, 3)
+        execution_drag_usd = round(
+            estimated_live_shares * (live_price - paper_price if side == "BUY" else paper_price - live_price),
+            4,
+        )
         return {
             "shadow_order_id": str(uuid.uuid4()),
             "source_trade_id": source_trade.get("source_trade_id"),
@@ -344,12 +375,17 @@ class ShadowBroker:
             "estimated_live_price": live_price,
             "estimated_live_shares": estimated_live_shares,
             "price_delta_bps": round(price_delta_bps, 2),
+            "price_delta_cents": price_delta_cents,
+            "execution_drag_usd": execution_drag_usd,
             "status": "SHADOW",
             "created_at": database.utc_now(),
             "position_key": source_trade.get("position_key", ""),
             "match_strategy": source_trade.get("match_strategy", ""),
             "token_id": token_id,
             "estimate_source": estimate_source,
+            "liquidity_tier": liquidity_tier,
+            "best_level_notional_usd": best_level_notional,
+            "top_three_depth_usd": top_three_depth,
             "requested_fill_amount_usd": round(requested_amount_usd, 2),
             "fallback_slippage_bps": float(settings.get("shadow_extra_slippage_bps") or 0.0),
         }
