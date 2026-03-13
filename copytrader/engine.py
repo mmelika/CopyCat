@@ -117,6 +117,8 @@ def _copy_trade_size(local_equity: float, source_amount_usd: float, leader_walle
 
 def _effective_exposure_cap(settings: dict, portfolio: dict) -> float:
     net_value = max(float(portfolio.get("net_value") or 0.0), 0.0)
+    if net_value < 100.0:
+        return round(net_value, 2)
     return round(max(net_value - EXPOSURE_CAP_BUFFER_USD, 0.0), 2)
 
 
