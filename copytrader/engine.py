@@ -24,7 +24,6 @@ FRESH_FILL_MARK_GRACE_SECONDS = 5
 EXPOSURE_CAP_BUFFER_USD = 30.0
 AUTO_PROFIT_TAKE_THRESHOLD = 0.70
 FULLY_PRICED_EXIT_THRESHOLD = 0.999
-PARTIAL_SELL_STOP_LOSS_PCT = 0.30
 
 
 def _clamp(value: float, lower: float, upper: float) -> float:
@@ -493,10 +492,6 @@ class CopyTradingEngine:
             failed += backlog_failed
             copied += bootstrap_copied
             database.refresh_local_position_market_values(self.db_path, freeze_recent_seconds=FRESH_FILL_MARK_GRACE_SECONDS, source_positions=positions)
-            auto_stop_loss_exits = self._liquidate_stop_loss_positions(settings, positions)
-            copied += auto_stop_loss_exits
-            if auto_stop_loss_exits:
-                database.refresh_local_position_market_values(self.db_path, source_positions=positions)
             auto_zero_value_exits = self._liquidate_zero_value_positions(settings, positions)
             copied += auto_zero_value_exits
             if auto_zero_value_exits:
@@ -776,25 +771,22 @@ class CopyTradingEngine:
             requested_amount = _round_up_to_cent(requested_amount) if requested_amount > 0 else 0.0
             return CopyDecision("copy", "Buy trade eligible.", requested_amount_usd=requested_amount)
 
-        local_position, match_strategy = self._find_matching_marked_local_position(trade, source_positions)
+        local_position, match_strategy = self._find_matching_local_position(trade)
         if not local_position or float(local_position.get("shares") or 0.0) <= 0:
             return CopyDecision("skip", "No matching local inventory to sell.")
-        if self._is_full_source_exit(trade, source_positions):
-            self._clear_position_stop_loss(local_position["position_key"])
-            requested_amount = round(float(local_position.get("market_value") or 0.0), 2)
-            if requested_amount <= 0.01:
-                requested_amount = 0.0
-            return CopyDecision(
-                "copy",
-                "Leader fully exited; sell entire matching local position.",
-                requested_amount_usd=requested_amount,
-                position_key=local_position["position_key"],
-                match_strategy=match_strategy,
-            )
-        self._arm_position_stop_loss(local_position["position_key"], PARTIAL_SELL_STOP_LOSS_PCT)
+        price = max(float(trade.get("price") or 0.0), 0.01)
+        max_sell_notional = round(float(local_position["shares"]) * price, 2)
+        if max_sell_notional < MIN_BET_USD:
+            return CopyDecision("skip", "Remaining position is too small to sell.")
+        requested_amount = max(requested_amount, MIN_BET_USD)
+        requested_amount = min(requested_amount, max_sell_notional)
+        requested_amount = _round_up_to_cent(requested_amount) if requested_amount > 0 else 0.0
         return CopyDecision(
-            "skip",
-            f"Leader partially sold; armed {int(PARTIAL_SELL_STOP_LOSS_PCT * 100)}% stop loss.",
+            "copy",
+            "Sell trade eligible.",
+            requested_amount_usd=requested_amount,
+            position_key=local_position["position_key"],
+            match_strategy=match_strategy,
         )
 
     def _liquidate_positions_at_profit_target(self, settings: dict, source_positions: list[dict]) -> int:
@@ -911,54 +903,6 @@ class CopyTradingEngine:
                 "INFO",
                 "rebalance",
                 "Auto-closed zero-value paper positions.",
-                {"positions_liquidated": liquidated},
-                self.db_path,
-            )
-        return liquidated
-
-    def _liquidate_stop_loss_positions(self, settings: dict, source_positions: list[dict]) -> int:
-        stop_losses = self._position_stop_losses()
-        if not stop_losses:
-            return 0
-
-        marked_positions = {
-            row["position_key"]: row
-            for row in database.list_local_positions_marked(self.db_path, source_positions=source_positions)
-            if float(row.get("shares") or 0.0) > 0
-        }
-        liquidated = 0
-        for position_key, loss_pct in stop_losses.items():
-            position = marked_positions.get(position_key)
-            if position is None:
-                self._clear_position_stop_loss(position_key)
-                continue
-            cost_basis = float(position.get("cost_basis") or 0.0)
-            unrealized_pnl = float(position.get("unrealized_pnl") or 0.0)
-            if cost_basis <= 0:
-                continue
-            if unrealized_pnl / cost_basis > -float(loss_pct):
-                continue
-            market_value = round(float(position.get("market_value") or 0.0), 2)
-            current_price = float(position.get("current_price") or 0.0)
-            self._execute_manual_trade(
-                market_slug=position["market_slug"],
-                market_title=position.get("market_title"),
-                outcome=position["outcome"],
-                side="SELL",
-                price=current_price if market_value > 0.01 else 0.0,
-                requested_amount_usd=market_value if market_value > 0.01 else 0.0,
-                reason=f"Auto-sold after hitting {int(float(loss_pct) * 100)}% stop loss.",
-                settings=settings,
-                match_strategy="auto-stop-loss",
-            )
-            self._clear_position_stop_loss(position_key)
-            liquidated += 1
-
-        if liquidated:
-            database.log(
-                "INFO",
-                "rebalance",
-                "Auto-sold paper positions after stop losses triggered.",
                 {"positions_liquidated": liquidated},
                 self.db_path,
             )
@@ -1148,42 +1092,6 @@ class CopyTradingEngine:
             trade,
             database.list_local_positions_marked(self.db_path, source_positions=source_positions),
         )
-
-    def _position_stop_losses(self) -> dict[str, float]:
-        app_state = database.get_app_state(self.db_path)
-        raw_value = app_state.get("position_stop_losses") or "{}"
-        try:
-            parsed = json.loads(raw_value)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            return {}
-        if not isinstance(parsed, dict):
-            return {}
-        results: dict[str, float] = {}
-        for key, value in parsed.items():
-            try:
-                results[str(key)] = float(value)
-            except (TypeError, ValueError):
-                continue
-        return results
-
-    def _save_position_stop_losses(self, stop_losses: dict[str, float]) -> None:
-        database.set_app_state("position_stop_losses", json.dumps(stop_losses, separators=(",", ":")), self.db_path)
-
-    def _arm_position_stop_loss(self, position_key: str, loss_pct: float) -> None:
-        stop_losses = self._position_stop_losses()
-        stop_losses[position_key] = float(loss_pct)
-        self._save_position_stop_losses(stop_losses)
-
-    def _clear_position_stop_loss(self, position_key: str) -> None:
-        stop_losses = self._position_stop_losses()
-        if position_key not in stop_losses:
-            return
-        stop_losses.pop(position_key, None)
-        self._save_position_stop_losses(stop_losses)
-
-    def _is_full_source_exit(self, trade: dict, source_positions: list[dict]) -> bool:
-        matched_source_position, _ = self._find_matching_position_in_records(trade, source_positions)
-        return not matched_source_position or float(matched_source_position.get("shares") or 0.0) <= 1e-6
 
     def _same_price_buy_guard(self, trade: dict, settings: dict) -> str | None:
         position_key = f"{trade['market_slug']}:{trade['outcome']}"
