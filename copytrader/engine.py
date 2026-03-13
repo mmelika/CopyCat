@@ -779,19 +779,17 @@ class CopyTradingEngine:
             requested_amount = _round_up_to_cent(requested_amount) if requested_amount > 0 else 0.0
             return CopyDecision("copy", "Buy trade eligible.", requested_amount_usd=requested_amount)
 
-        local_position, match_strategy = self._find_matching_local_position(trade)
-        if not local_position or float(local_position["shares"]) <= 0:
+        local_position, match_strategy = self._find_matching_marked_local_position(trade, source_positions)
+        if not local_position or float(local_position.get("shares") or 0.0) <= 0:
             return CopyDecision("skip", "No matching local inventory to sell.")
-        price = max(float(trade.get("price") or 0.0), 0.01)
-        max_sell_notional = round(float(local_position["shares"]) * price, 2)
-        if max_sell_notional < MIN_BET_USD:
-            return CopyDecision("skip", "Remaining position is too small to sell.")
-        requested_amount = max(requested_amount, MIN_BET_USD)
-        requested_amount = min(requested_amount, max_sell_notional)
-        requested_amount = _round_up_to_cent(requested_amount) if requested_amount > 0 else 0.0
+        if float(local_position.get("unrealized_pnl") or 0.0) <= 0:
+            return CopyDecision("skip", "Matching local position is not in profit.")
+        requested_amount = round(float(local_position.get("market_value") or 0.0), 2)
+        if requested_amount < MIN_BET_USD:
+            return CopyDecision("skip", "Matching local position is too small to sell.")
         return CopyDecision(
             "copy",
-            "Sell trade eligible.",
+            "Profitable matching position eligible for full sell.",
             requested_amount_usd=requested_amount,
             position_key=local_position["position_key"],
             match_strategy=match_strategy,
@@ -840,17 +838,13 @@ class CopyTradingEngine:
             market_value = round(float(position.get("market_value") or 0.0), 2)
             if market_value < MIN_BET_USD:
                 continue
-            sell_amount = min(market_value, remaining_needed)
-            sell_amount = _round_up_to_cent(sell_amount)
-            if sell_amount < MIN_BET_USD:
-                continue
             order, _ = self._execute_manual_trade(
                 market_slug=position["market_slug"],
                 market_title=position.get("market_title"),
                 outcome=position["outcome"],
                 side="SELL",
                 price=float(position["current_price"]),
-                requested_amount_usd=sell_amount,
+                requested_amount_usd=market_value,
                 reason="Auto-sold to restore 20% cash reserve.",
                 settings=settings,
                 match_strategy="cash-reserve-rebalance",
@@ -1174,6 +1168,12 @@ class CopyTradingEngine:
 
     def _find_matching_local_position(self, trade: dict) -> tuple[dict | None, str]:
         return self._find_matching_position_in_records(trade, database.get_local_positions(self.db_path))
+
+    def _find_matching_marked_local_position(self, trade: dict, source_positions: list[dict]) -> tuple[dict | None, str]:
+        return self._find_matching_position_in_records(
+            trade,
+            database.list_local_positions_marked(self.db_path, source_positions=source_positions),
+        )
 
     def _same_price_buy_guard(self, trade: dict, settings: dict) -> str | None:
         position_key = f"{trade['market_slug']}:{trade['outcome']}"
