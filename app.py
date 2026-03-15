@@ -208,6 +208,45 @@ def audit_profit():
         ), 500
 
 
+@server.get("/audit/shadow")
+def audit_shadow():
+    settings = database.get_settings(DB_PATH)
+    app_state = database.get_app_state(DB_PATH)
+    shadow_portfolio = database.shadow_portfolio_totals(DB_PATH)
+    target = settings.get("target_wallet") or settings.get("target_handle") or app_state.get("resolved_target_wallet") or ""
+    client = PolymarketClient()
+
+    try:
+        profile = client.resolve_target_wallet(target)
+        live_positions = client.fetch_positions(profile["wallet"], limit=200)
+        shadow_portfolio = database.shadow_portfolio_totals(DB_PATH, live_positions)
+        verification = database.shadow_profit_verification(live_positions, DB_PATH)
+        return jsonify(
+            {
+                "status": "ok" if verification["verified"] else "warning",
+                "target_wallet": profile["wallet"],
+                "target_handle": profile.get("handle") or settings.get("target_handle") or "",
+                "execution_mode": settings.get("execution_mode") or "paper",
+                "server_net_value": verification["displayed_net_value"],
+                "server_cash_balance": verification["displayed_cash_balance"],
+                "server_marked_positions": verification["displayed_marked_positions"],
+                "shadow_verification": verification,
+            }
+        ), 200
+    except Exception as exc:
+        return jsonify(
+            {
+                "status": "error",
+                "error": str(exc),
+                "target_wallet": target,
+                "execution_mode": settings.get("execution_mode") or "paper",
+                "server_net_value": shadow_portfolio["net_value"],
+                "server_cash_balance": shadow_portfolio["cash_balance"],
+                "server_marked_positions": shadow_portfolio["gross_exposure"],
+            }
+        ), 500
+
+
 def fmt_currency(value) -> str:
     return f"${float(value):,.2f}"
 
@@ -724,17 +763,21 @@ def shadow_portfolio_totals_from_analytics(settings: dict, analytics: dict, shad
 def portfolio_chart(range_key: str):
     settings = database.get_settings(DB_PATH)
     snapshots, shadow_snapshots = load_snapshots_for_range(range_key)
-    if not snapshots:
-        snapshots = [{"ts": datetime.now(timezone.utc).isoformat(), "net_value": 0.0}]
+    shadow_mode_active = (settings.get("execution_mode") or "paper").strip().lower() == "shadow"
+    primary_is_shadow = shadow_mode_active and bool(shadow_snapshots)
+    primary_snapshots = shadow_snapshots if primary_is_shadow else snapshots
+    comparison_snapshots = snapshots if primary_is_shadow else shadow_snapshots
+    if not primary_snapshots:
+        primary_snapshots = [{"ts": datetime.now(timezone.utc).isoformat(), "net_value": 0.0}]
 
-    baseline = float(snapshots[0]["net_value"] or 0.0)
-    current_value = float(snapshots[-1]["net_value"] or 0.0)
+    baseline = float(primary_snapshots[0]["net_value"] or 0.0)
+    current_value = float(primary_snapshots[-1]["net_value"] or 0.0)
     change_value = current_value - baseline
     positive = change_value >= 0
     line_color = "#1fa2ff" if positive else "#ff7d7d"
     fill_color = "rgba(31,162,255,0.18)" if positive else "rgba(255,125,125,0.14)"
-    x_values = [to_pacific(row["ts"]) or row["ts"] for row in snapshots]
-    y_values = [float(row["net_value"] or 0.0) for row in snapshots]
+    x_values = [to_pacific(row["ts"]) or row["ts"] for row in primary_snapshots]
+    y_values = [float(row["net_value"] or 0.0) for row in primary_snapshots]
 
     figure = go.Figure()
     figure.add_trace(
@@ -749,18 +792,18 @@ def portfolio_chart(range_key: str):
             showlegend=False,
         )
     )
-    shadow_mode_active = (settings.get("execution_mode") or "paper").strip().lower() == "shadow"
-    if shadow_mode_active and shadow_snapshots:
-        shadow_x_values = [to_pacific(row["ts"]) or row["ts"] for row in shadow_snapshots]
-        shadow_y_values = [float(row["net_value"] or 0.0) for row in shadow_snapshots]
+    if shadow_mode_active and comparison_snapshots:
+        comparison_x_values = [to_pacific(row["ts"]) or row["ts"] for row in comparison_snapshots]
+        comparison_y_values = [float(row["net_value"] or 0.0) for row in comparison_snapshots]
+        comparison_name = "Paper" if primary_is_shadow else "Shadow"
         figure.add_trace(
             go.Scatter(
-                x=shadow_x_values,
-                y=shadow_y_values,
+                x=comparison_x_values,
+                y=comparison_y_values,
                 mode="lines",
                 line={"color": "#ffbf47", "width": 2.5, "dash": "dot"},
-                hovertemplate="Shadow %{x}<br>%{y:$,.2f}<extra></extra>",
-                name="Shadow",
+                hovertemplate=f"{comparison_name} %{{x}}<br>%{{y:$,.2f}}<extra></extra>",
+                name=comparison_name,
                 showlegend=False,
             )
         )
@@ -840,12 +883,14 @@ def set_portfolio_range(_, __, ___, ____, current_range):
 def refresh_portfolio_chart(_, range_key):
     selected_range = range_key or "1D"
     settings = database.get_settings(DB_PATH)
-    snapshots, _ = load_snapshots_for_range(selected_range)
-    if not snapshots:
+    snapshots, shadow_snapshots = load_snapshots_for_range(selected_range)
+    shadow_mode_active = (settings.get("execution_mode") or "paper").strip().lower() == "shadow"
+    primary_snapshots = shadow_snapshots if shadow_mode_active and shadow_snapshots else snapshots
+    if not primary_snapshots:
         amount_text = fmt_signed_currency(0.0)
     else:
-        baseline = float(snapshots[0]["net_value"] or 0.0)
-        current_value = float(snapshots[-1]["net_value"] or 0.0)
+        baseline = float(primary_snapshots[0]["net_value"] or 0.0)
+        current_value = float(primary_snapshots[-1]["net_value"] or 0.0)
         amount_text = fmt_signed_currency(current_value - baseline)
 
     subtitle_map = {
@@ -855,8 +900,8 @@ def refresh_portfolio_chart(_, range_key):
         "ALL": "All Time",
     }
     subtitle = subtitle_map.get(selected_range, "Today (PT)")
-    if (settings.get("execution_mode") or "paper").strip().lower() == "shadow":
-        subtitle = f"{subtitle} | solid paper, dotted shadow"
+    if shadow_mode_active:
+        subtitle = f"{subtitle} | solid shadow, dotted paper"
     button_classes = []
     for key in ("1D", "1W", "1M", "ALL"):
         button_classes.append("portfolio-range-btn portfolio-range-btn-active" if key == selected_range else "portfolio-range-btn")
@@ -956,11 +1001,20 @@ def refresh_dashboard(_, trade_tab):
             "total_gain": 0.0,
             "total_gain_pct": 0.0,
         }
-    daily_performance = database.daily_portfolio_performance(DB_PATH)[:12]
-    daily_realized_map = {row["date"]: row["realized_pnl"] for row in analytics["daily_realized"]}
+    shadow_has_history = shadow_mode_active and shadow_summary["total"] > 0
+    primary_is_shadow = shadow_has_history
+    primary_name = "shadow" if primary_is_shadow else "paper"
+    primary_analytics = shadow_analytics if primary_is_shadow else analytics
+    primary_portfolio = shadow_portfolio if primary_is_shadow else portfolio
+    daily_performance = (
+        database.shadow_daily_portfolio_performance(DB_PATH)[:12]
+        if primary_is_shadow
+        else database.daily_portfolio_performance(DB_PATH)[:12]
+    )
+    daily_realized_map = {row["date"]: row["realized_pnl"] for row in primary_analytics["daily_realized"]}
     effective_exposure_cap = _effective_exposure_cap(settings, portfolio)
 
-    active_positions_value = float(portfolio["gross_exposure"])
+    active_positions_value = float(primary_portfolio["gross_exposure"])
     copied_trade_rows = [
         [
             fmt_pacific_time(row["created_at"]),
@@ -1006,7 +1060,7 @@ def refresh_dashboard(_, trade_tab):
             fmt_currency(row["market_value"]),
             fmt_signed_currency(row["unrealized_pnl"]),
         ]
-        for row in analytics["open_trades"][:40]
+        for row in primary_analytics["open_trades"][:40]
     ] or [["No open trades", "-", "-", "-", "-", "-", "-", "-", "-"]]
     closed_trade_rows = [
         [
@@ -1021,27 +1075,27 @@ def refresh_dashboard(_, trade_tab):
             fmt_currency(row["proceeds"]),
             fmt_signed_currency(row["pnl"]),
         ]
-        for row in analytics["closed_trades"][:40]
+        for row in primary_analytics["closed_trades"][:40]
     ] or [["No closed trades", "-", "-", "-", "-", "-", "-", "-", "-", "-"]]
     trade_book_table = (
         render_table(["Bought At (PT)", "Market", "Outcome", "Shares", "Buy Px", "Cost", "Mark Px", "Value", "P/L"], open_trade_rows)
         if trade_tab == "open-trades"
         else render_table(["Bought At (PT)", "Sold At (PT)", "Market", "Outcome", "Shares", "Buy Px", "Sell Px", "Cost", "Proceeds", "P/L"], closed_trade_rows)
     )
-    trade_book_count = len(analytics["open_trades"]) if trade_tab == "open-trades" else len(analytics["closed_trades"])
-    net_value = max(float(portfolio["net_value"]), 0.01)
-    cash_pct = round((float(portfolio["cash_balance"]) / net_value) * 100, 1) if net_value else 0.0
-    holdings_pct = round((float(portfolio["gross_exposure"]) / net_value) * 100, 1) if net_value else 0.0
-    total_realized_pnl = round(sum(float(row.get("pnl") or 0.0) for row in analytics["closed_trades"]), 2)
-    total_closed_cost = round(sum(float(row.get("cost_basis") or 0.0) for row in analytics["closed_trades"]), 2)
-    win_count = sum(1 for row in analytics["closed_trades"] if float(row.get("pnl") or 0.0) > 0)
-    loss_count = sum(1 for row in analytics["closed_trades"] if float(row.get("pnl") or 0.0) < 0)
-    closed_trade_count = len(analytics["closed_trades"])
+    trade_book_count = len(primary_analytics["open_trades"]) if trade_tab == "open-trades" else len(primary_analytics["closed_trades"])
+    net_value = max(float(primary_portfolio["net_value"]), 0.01)
+    cash_pct = round((float(primary_portfolio["cash_balance"]) / net_value) * 100, 1) if net_value else 0.0
+    holdings_pct = round((float(primary_portfolio["gross_exposure"]) / net_value) * 100, 1) if net_value else 0.0
+    total_realized_pnl = round(sum(float(row.get("pnl") or 0.0) for row in primary_analytics["closed_trades"]), 2)
+    total_closed_cost = round(sum(float(row.get("cost_basis") or 0.0) for row in primary_analytics["closed_trades"]), 2)
+    win_count = sum(1 for row in primary_analytics["closed_trades"] if float(row.get("pnl") or 0.0) > 0)
+    loss_count = sum(1 for row in primary_analytics["closed_trades"] if float(row.get("pnl") or 0.0) < 0)
+    closed_trade_count = len(primary_analytics["closed_trades"])
     realized_win_rate = round((win_count / closed_trade_count) * 100, 1) if closed_trade_count else 0.0
     realized_return_pct = round((total_realized_pnl / total_closed_cost) * 100, 2) if total_closed_cost else 0.0
-    all_open_positions = analytics["open_positions"]
+    all_open_positions = primary_analytics["open_positions"]
     open_positions = all_open_positions[:8]
-    top_holding = analytics["open_positions"][0] if analytics["open_positions"] else None
+    top_holding = primary_analytics["open_positions"][0] if primary_analytics["open_positions"] else None
     holdings_list = []
     holdings_list.append(
         html.Div(
@@ -1118,11 +1172,11 @@ def refresh_dashboard(_, trade_tab):
                 ],
             )
         )
-    if not analytics["open_positions"]:
+    if not primary_analytics["open_positions"]:
         holdings_list.append(html.Div("No active holdings", className="portfolio-empty"))
 
     realized_groups = {}
-    for row in analytics["closed_trades"]:
+    for row in primary_analytics["closed_trades"]:
         position_key = row["position_key"]
         aggregate = realized_groups.setdefault(
             position_key,
@@ -1253,7 +1307,6 @@ def refresh_dashboard(_, trade_tab):
     shadow_delta = round(float(shadow_portfolio["net_value"]) - float(portfolio["net_value"]), 2)
     shadow_delta_text = fmt_signed_currency(shadow_delta)
     shadow_tone = signed_class(shadow_delta)
-    shadow_has_history = shadow_mode_active and shadow_summary["total"] > 0
     shadow_net_display = fmt_currency(shadow_portfolio["net_value"]) if shadow_has_history else ("Starting flat" if shadow_mode_active else "Disabled")
     shadow_positions_sub = (
         f"{shadow_portfolio['positions_count']} open positions"
@@ -1421,8 +1474,8 @@ def refresh_dashboard(_, trade_tab):
     )
 
     refresh_text = f"Last sync: {fmt_pacific_time(app_state['last_sync_at']) if app_state['last_sync_at'] else 'never'}"
-    net_gain = float(portfolio["total_gain"])
-    net_chip_text = f"{portfolio['total_gain_pct']:+.2f}%"
+    net_gain = float(primary_portfolio["total_gain"])
+    net_chip_text = f"{primary_portfolio['total_gain_pct']:+.2f}%"
 
     return (
         heartbeat_label(app_state, runtime_status, stale_age_seconds),
@@ -1444,14 +1497,18 @@ def refresh_dashboard(_, trade_tab):
         str(len(pending)),
         f"{len(copy_orders)} paper orders | {len(shadow_orders)} recent shadow rows" if shadow_mode_active else f"{len(copy_orders)} total copied orders",
         fmt_currency(active_positions_value),
-        f"{portfolio['positions_count']} paper positions" + (f" | shadow {len(shadow_analytics['open_positions'])}" if shadow_mode_active else ""),
-        fmt_currency(portfolio["net_value"]),
+        (
+            f"{primary_portfolio['positions_count']} {primary_name} positions | paper {len(analytics['open_positions'])} | shadow {len(shadow_analytics['open_positions'])}"
+            if shadow_mode_active
+            else f"{primary_portfolio['positions_count']} {primary_name} positions"
+        ),
+        fmt_currency(primary_portfolio["net_value"]),
         net_chip_text,
         f"stat-chip {signed_class(net_gain)}",
-        f"Cash {fmt_currency(portfolio['cash_balance'])} + Marked Positions {fmt_currency(portfolio['gross_exposure'])} | {fmt_signed_currency(portfolio['total_gain'])} ({portfolio['total_gain_pct']:+.2f}%) vs start",
-        str(portfolio["positions_count"]),
-        f"{cash_pct:.1f}% | {fmt_currency(portfolio['cash_balance'])}",
-        f"{holdings_pct:.1f}% | {fmt_currency(portfolio['gross_exposure'])}",
+        f"{primary_name.title()} cash {fmt_currency(primary_portfolio['cash_balance'])} + marked positions {fmt_currency(primary_portfolio['gross_exposure'])} | {fmt_signed_currency(primary_portfolio['total_gain'])} ({primary_portfolio['total_gain_pct']:+.2f}%) vs start",
+        str(primary_portfolio["positions_count"]),
+        f"{cash_pct:.1f}% | {fmt_currency(primary_portfolio['cash_balance'])}",
+        f"{holdings_pct:.1f}% | {fmt_currency(primary_portfolio['gross_exposure'])}",
         f"{short_text(top_holding['market_title'], 24)} | {fmt_currency(top_holding['market_value'])}" if top_holding else "No holdings yet",
         holdings_list,
         str(len(realized_summary_rows)),

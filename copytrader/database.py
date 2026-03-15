@@ -1537,6 +1537,42 @@ def live_profit_verification(source_positions: list[dict], db_path: Path | str =
     }
 
 
+def shadow_profit_verification(source_positions: list[dict], db_path: Path | str = DB_PATH) -> dict:
+    settings = get_settings(db_path)
+    analytics = shadow_trade_analytics(db_path, source_positions=source_positions)
+    orders = list_all_shadow_orders(db_path)
+    displayed = shadow_portfolio_totals(db_path, source_positions=source_positions)
+
+    starting_balance = round(float(settings["paper_starting_balance"]), 2)
+    total_buy_notional = round(sum(float(order.get("requested_amount_usd") or 0.0) for order in orders if order.get("side") == "BUY"), 2)
+    total_sell_proceeds = round(sum(float(row.get("proceeds") or 0.0) for row in analytics["closed_trades"]), 2)
+    reconstructed_cash = round(starting_balance - total_buy_notional + total_sell_proceeds, 2)
+    open_market_value = round(sum(float(row.get("market_value") or 0.0) for row in analytics["open_trades"]), 2)
+    reconstructed_net_value = round(reconstructed_cash + open_market_value, 2)
+    closed_realized_pnl = round(sum(float(row.get("pnl") or 0.0) for row in analytics["closed_trades"]), 2)
+    open_unrealized_pnl = round(sum(float(row.get("unrealized_pnl") or 0.0) for row in analytics["open_trades"]), 2)
+    expected_total_gain = round(closed_realized_pnl + open_unrealized_pnl, 2)
+    display_difference = round(float(displayed["net_value"]) - reconstructed_net_value, 2)
+
+    return {
+        "verified": abs(display_difference) < 0.02,
+        "displayed_net_value": round(float(displayed["net_value"]), 2),
+        "displayed_cash_balance": round(float(displayed["cash_balance"]), 2),
+        "displayed_marked_positions": round(float(displayed["gross_exposure"]), 2),
+        "reconstructed_cash": reconstructed_cash,
+        "reconstructed_net_value": reconstructed_net_value,
+        "open_market_value": open_market_value,
+        "closed_realized_pnl": closed_realized_pnl,
+        "open_unrealized_pnl": open_unrealized_pnl,
+        "expected_total_gain": expected_total_gain,
+        "display_difference": display_difference,
+        "orders_count": len(orders),
+        "source_positions_count": len(source_positions or []),
+        "open_positions_count": len(analytics["open_trades"]),
+        "open_positions_sample": analytics["open_trades"][:10],
+    }
+
+
 def daily_portfolio_performance(db_path: Path | str = DB_PATH) -> list[dict]:
     return _daily_portfolio_performance(list_portfolio_snapshots(db_path, limit=1000))
 
