@@ -7,7 +7,7 @@ import time
 import uuid
 import math
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from . import database
 from .config import DB_PATH
@@ -24,6 +24,8 @@ FRESH_FILL_MARK_GRACE_SECONDS = 5
 EXPOSURE_CAP_BUFFER_USD = 30.0
 AUTO_PROFIT_TAKE_THRESHOLD = 0.70
 FULLY_PRICED_EXIT_THRESHOLD = 0.999
+RESOLVED_LOSS_PRICE_THRESHOLD = 0.001
+RESOLVED_SWEEP_MAX_POSITIONS = 120
 
 
 def _clamp(value: float, lower: float, upper: float) -> float:
@@ -40,6 +42,22 @@ def _parse_iso(value: str) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _extract_market_date(value: str) -> date | None:
+    if not value:
+        return None
+    match = re.search(r"(\d{4}-\d{2}-\d{2})", value)
+    if not match:
+        return None
+    try:
+        return date.fromisoformat(match.group(1))
+    except ValueError:
+        return None
+
+
+def _market_effective_date(record: dict) -> date | None:
+    return _extract_market_date(record.get("market_slug") or "") or _extract_market_date(record.get("market_title") or "")
 
 
 def _normalize_text(value: str) -> str:
@@ -509,6 +527,7 @@ class CopyTradingEngine:
         self._last_tick_started_at = ""
         self._last_tick_finished_at = ""
         self._last_tick_status = "idle"
+        self._last_resolved_sweep_at = ""
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -609,6 +628,10 @@ class CopyTradingEngine:
             failed += backlog_failed
             copied += bootstrap_copied
             database.refresh_local_position_market_values(self.db_path, freeze_recent_seconds=FRESH_FILL_MARK_GRACE_SECONDS, source_positions=positions)
+            resolved_exits = self._reconcile_resolved_positions(settings)
+            copied += resolved_exits
+            if resolved_exits:
+                database.refresh_local_position_market_values(self.db_path, source_positions=positions)
             auto_zero_value_exits = self._liquidate_zero_value_positions(settings, positions)
             copied += auto_zero_value_exits
             if auto_zero_value_exits:
@@ -696,6 +719,95 @@ class CopyTradingEngine:
             "net_value": portfolio["net_value"],
             "cash_balance": portfolio["cash_balance"],
         }
+
+    def _reconcile_resolved_positions(self, settings: dict) -> int:
+        now = datetime.now(timezone.utc)
+        last_sweep_at = _parse_iso(self._last_resolved_sweep_at)
+        if last_sweep_at and (now - last_sweep_at).total_seconds() < 30:
+            return 0
+
+        open_positions = database.get_local_positions(self.db_path)
+        if not open_positions:
+            self._last_resolved_sweep_at = database.utc_now()
+            return 0
+
+        candidate_rows = []
+        today = now.date()
+        for row in open_positions:
+            if float(row.get("shares") or 0.0) <= 0:
+                continue
+            market_date = _market_effective_date(row)
+            if market_date is None or market_date > today:
+                continue
+            candidate_rows.append(
+                {
+                    "position_key": row.get("position_key"),
+                    "market_slug": row.get("market_slug"),
+                    "market_title": row.get("market_title"),
+                    "outcome": row.get("outcome"),
+                    "updated_at": row.get("updated_at") or "",
+                }
+            )
+
+        if not candidate_rows:
+            self._last_resolved_sweep_at = database.utc_now()
+            return 0
+
+        candidate_rows.sort(key=lambda row: row["updated_at"])
+        candidate_rows = candidate_rows[:RESOLVED_SWEEP_MAX_POSITIONS]
+        market_prices = database.fetch_live_market_prices(candidate_rows, self.db_path)
+        if not market_prices:
+            self._last_resolved_sweep_at = database.utc_now()
+            return 0
+
+        marked_positions = {
+            row["position_key"]: row
+            for row in database.list_local_positions_marked(self.db_path, source_positions=market_prices)
+        }
+        closed = 0
+        for candidate in candidate_rows:
+            position = marked_positions.get(candidate["position_key"])
+            if not position or float(position.get("shares") or 0.0) <= 0:
+                continue
+            current_price = float(position.get("current_price") or 0.0)
+            if current_price <= RESOLVED_LOSS_PRICE_THRESHOLD:
+                self._execute_manual_trade(
+                    market_slug=position["market_slug"],
+                    market_title=position.get("market_title"),
+                    outcome=position["outcome"],
+                    side="SELL",
+                    price=0.0,
+                    requested_amount_usd=0.0,
+                    reason="Resolved market sweep closed losing position at 0c.",
+                    settings=settings,
+                    match_strategy="resolved-market-sweep-loss",
+                )
+                closed += 1
+                continue
+            if current_price >= FULLY_PRICED_EXIT_THRESHOLD:
+                self._execute_manual_trade(
+                    market_slug=position["market_slug"],
+                    market_title=position.get("market_title"),
+                    outcome=position["outcome"],
+                    side="SELL",
+                    price=current_price,
+                    requested_amount_usd=round(float(position.get("market_value") or 0.0), 2),
+                    reason="Resolved market sweep closed winning position at full price.",
+                    settings=settings,
+                    match_strategy="resolved-market-sweep-win",
+                )
+                closed += 1
+
+        self._last_resolved_sweep_at = database.utc_now()
+        if closed:
+            database.log(
+                "INFO",
+                "reconcile",
+                "Resolved market sweep closed settled paper positions.",
+                {"positions_liquidated": closed, "candidates_scanned": len(candidate_rows)},
+                self.db_path,
+            )
+        return closed
 
     def _execution_mode(self, settings: dict) -> str:
         mode = (settings.get("execution_mode") or "paper").strip().lower()

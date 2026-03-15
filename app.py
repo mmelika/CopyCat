@@ -1131,7 +1131,7 @@ def refresh_dashboard(_, trade_tab):
                         children=[
                             market_link(row["market_title"], row["market_slug"], 42),
                             html.Div(
-                                f"{row['outcome']} | spent {fmt_currency(row['cost_basis'])} @ {fmt_number(row['current_price'], 3)}",
+                                f"{row['outcome']} | spent {fmt_currency(row['cost_basis'])} @ avg {fmt_number(row['avg_price'], 3)}",
                                 className="portfolio-holding-subtitle",
                             ),
                         ],
