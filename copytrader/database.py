@@ -171,6 +171,34 @@ def init_db(db_path: Path | str = DB_PATH) -> None:
                 raw_json TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS live_order_attempts (
+                live_order_id TEXT PRIMARY KEY,
+                source_trade_id TEXT,
+                market_slug TEXT,
+                market_title TEXT,
+                outcome TEXT,
+                side TEXT,
+                requested_amount_usd REAL,
+                limit_price REAL,
+                estimated_shares REAL,
+                token_id TEXT,
+                status TEXT,
+                failure_reason TEXT,
+                created_at TEXT,
+                raw_json TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS live_account_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT NOT NULL,
+                wallet_address TEXT NOT NULL,
+                cash_balance REAL NOT NULL,
+                gross_exposure REAL NOT NULL,
+                net_value REAL NOT NULL,
+                positions_count INTEGER NOT NULL,
+                raw_json TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS local_positions (
                 position_key TEXT PRIMARY KEY,
                 market_slug TEXT,
@@ -583,6 +611,63 @@ def insert_shadow_order(order: dict, db_path: Path | str = DB_PATH) -> None:
                 order.get("created_at"),
                 _json(order),
             ),
+        )
+
+
+def insert_live_order_attempt(order: dict, db_path: Path | str = DB_PATH) -> None:
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO live_order_attempts(
+                live_order_id, source_trade_id, market_slug, market_title, outcome, side,
+                requested_amount_usd, limit_price, estimated_shares, token_id, status,
+                failure_reason, created_at, raw_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                order["live_order_id"],
+                order.get("source_trade_id"),
+                order.get("market_slug"),
+                order.get("market_title"),
+                order.get("outcome"),
+                order.get("side"),
+                order.get("requested_amount_usd"),
+                order.get("limit_price"),
+                order.get("estimated_shares"),
+                order.get("token_id"),
+                order.get("status"),
+                order.get("failure_reason"),
+                order.get("created_at"),
+                _json(order),
+            ),
+        )
+
+
+def list_live_order_attempts(limit: int = 100, db_path: Path | str = DB_PATH) -> list[dict]:
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM live_order_attempts ORDER BY datetime(created_at) DESC, live_order_id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def snapshot_live_account(
+    wallet_address: str,
+    cash_balance: float,
+    gross_exposure: float,
+    net_value: float,
+    positions_count: int,
+    payload: dict,
+    db_path: Path | str = DB_PATH,
+) -> None:
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO live_account_snapshots(ts, wallet_address, cash_balance, gross_exposure, net_value, positions_count, raw_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (utc_now(), wallet_address, cash_balance, gross_exposure, net_value, positions_count, _json(payload)),
         )
 
 

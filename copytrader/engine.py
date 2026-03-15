@@ -383,10 +383,85 @@ class LiveBroker:
     def __init__(self, client: PolymarketClient):
         self.client = client
 
+    def _wallet_address(self, settings: dict) -> str:
+        return (settings.get("live_wallet_address") or "").strip()
+
+    def _ensure_live_configuration(self, settings: dict) -> str:
+        wallet_address = self._wallet_address(settings)
+        if not wallet_address:
+            raise RuntimeError("Live execution mode requires a configured live wallet address.")
+        return wallet_address
+
+    def _record_live_intent(self, order: dict, db_path=DB_PATH) -> None:
+        database.insert_live_order_attempt(order, db_path)
+        database.set_app_state("live_last_intent_at", order["created_at"], db_path)
+        database.set_app_state("live_last_intent_status", order["status"], db_path)
+        database.set_app_state("live_last_intent_error", order.get("failure_reason") or "", db_path)
+
+    def refresh_account_snapshot(self, settings: dict, db_path=DB_PATH) -> dict:
+        wallet_address = self._ensure_live_configuration(settings)
+        positions = self.client.fetch_positions(wallet_address, limit=200)
+        gross_exposure = round(sum(float(item.get("notional_usd") or 0.0) for item in positions), 2)
+        snapshot = {
+            "wallet_address": wallet_address,
+            "cash_balance": 0.0,
+            "gross_exposure": gross_exposure,
+            "net_value": gross_exposure,
+            "positions_count": len(positions),
+            "positions": positions,
+        }
+        database.snapshot_live_account(
+            wallet_address,
+            snapshot["cash_balance"],
+            snapshot["gross_exposure"],
+            snapshot["net_value"],
+            snapshot["positions_count"],
+            snapshot,
+            db_path,
+        )
+        return snapshot
+
     def execute(self, source_trade: dict, requested_amount_usd: float, settings: dict, db_path=DB_PATH) -> dict:
+        wallet_address = self._ensure_live_configuration(settings)
+        intent = self.client.build_live_order_intent(
+            market_slug=source_trade.get("market_slug") or "",
+            outcome=source_trade.get("outcome") or "",
+            side=source_trade.get("side") or "",
+            requested_amount_usd=requested_amount_usd,
+            price_buffer_bps=float(settings.get("live_price_buffer_bps") or 0.0),
+        )
+        max_order_usd = max(float(settings.get("live_max_order_usd") or 0.0), 0.0)
+        status = "BLOCKED"
+        failure_reason = "Live trading disabled."
+        if max_order_usd > 0 and float(intent["requested_amount_usd"]) > max_order_usd + 1e-9:
+            failure_reason = f"Requested live order exceeds configured max of ${max_order_usd:.2f}."
+        order = {
+            "live_order_id": str(uuid.uuid4()),
+            "source_trade_id": source_trade.get("source_trade_id"),
+            "market_slug": intent["market_slug"],
+            "market_title": source_trade.get("market_title") or intent["market_title"],
+            "outcome": intent["outcome"],
+            "side": intent["side"],
+            "requested_amount_usd": intent["requested_amount_usd"],
+            "limit_price": intent["limit_price"],
+            "estimated_shares": intent["estimated_shares"],
+            "token_id": intent["token_id"],
+            "wallet_address": wallet_address,
+            "status": status,
+            "failure_reason": failure_reason,
+            "created_at": database.utc_now(),
+            "position_key": source_trade.get("position_key", ""),
+            "match_strategy": source_trade.get("match_strategy", ""),
+            "reference_price": intent["reference_price"],
+            "book_price": intent["book_price"],
+            "price_buffer_bps": intent["price_buffer_bps"],
+            "submission_enabled": bool(int(settings.get("live_trading_enabled") or 0)),
+        }
+        self._record_live_intent(order, db_path)
+        self.refresh_account_snapshot(settings, db_path)
         raise RuntimeError(
-            "Live execution mode is scaffolded but real order submission is not implemented. "
-            "Add signed CLOB order placement, fill reconciliation, and live balance tracking before enabling it."
+            "Live order intent prepared and logged, but submission is still blocked. "
+            "Implement signed CLOB order placement before enabling real trading."
         )
 
     def execute_manual(
@@ -402,9 +477,21 @@ class LiveBroker:
         settings: dict,
         db_path=DB_PATH,
     ) -> dict:
-        raise RuntimeError(
-            "Live execution mode is scaffolded but manual live order submission is not implemented. "
-            "Add signed CLOB sell/buy support before using live mode."
+        return self.execute(
+            {
+                "source_trade_id": None,
+                "market_slug": market_slug,
+                "market_title": market_title,
+                "outcome": outcome,
+                "side": side,
+                "price": price,
+                "position_key": "",
+                "match_strategy": "manual-live-intent",
+                "reason": reason,
+            },
+            requested_amount_usd,
+            settings,
+            db_path,
         )
 
 

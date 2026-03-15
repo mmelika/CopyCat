@@ -508,6 +508,34 @@ def settings_modal():
                             html.Div(
                                 className="modal-row modal-row-2",
                                 children=[
+                                    text_field("Live Wallet", "settings-live-wallet", "0x...", "Wallet to reconcile when live mode is selected."),
+                                    text_field("Live API Base URL", "settings-live-api-base-url", "https://clob.polymarket.com", "Base URL for future live CLOB order submission."),
+                                ],
+                            ),
+                            html.Div(
+                                className="modal-row modal-row-2",
+                                children=[
+                                    number_field("Live Max Order USD", "settings-live-max-order-usd", "25", "Fail-closed ceiling for any prepared live order intent.", min_value=0, step=0.01),
+                                    number_field("Live Price Buffer Bps", "settings-live-price-buffer-bps", "20", "Extra cushion applied when building live limit prices from the book.", min_value=0, step=1),
+                                ],
+                            ),
+                            html.Div(
+                                className="modal-row modal-row-2",
+                                children=[
+                                    select_field(
+                                        "Live Trading Switch",
+                                        "settings-live-trading-enabled",
+                                        [
+                                            {"label": "Disabled", "value": 0},
+                                            {"label": "Enabled (Not Active Yet)", "value": 1},
+                                        ],
+                                        "Stored for future cutover, but current code still blocks all live submissions.",
+                                    ),
+                                ],
+                            ),
+                            html.Div(
+                                className="modal-row modal-row-2",
+                                children=[
                                     number_field("Paper Starting Balance", "settings-start-balance", "5000", "Baseline used for total return and fresh-start resets.", min_value=0, step=0.01),
                                     number_field("Paper Cash Balance", "settings-cash-balance", "5000", "Current deployable cash in the paper portfolio.", min_value=0, step=0.01),
                                 ],
@@ -1216,7 +1244,8 @@ def refresh_dashboard(_, trade_tab):
         execution_pill_class = "mode-pill mode-live"
         market_execution = "Live trading scaffold"
         execution_card_value = "Live Scaffold"
-        execution_card_sub = f"Execution routes to LiveBroker, but live order submission is not implemented yet | {target_label}"
+        live_status = app_state.get("live_last_intent_status") or "No live intent yet"
+        execution_card_sub = f"{live_status} | submission remains blocked until live trading is explicitly implemented | {target_label}"
     elif shadow_mode_active:
         market_execution = f"Shadow +{int(settings.get('shadow_extra_slippage_bps') or 0)}bps"
         execution_card_value = "Shadow On"
@@ -1374,6 +1403,20 @@ def refresh_dashboard(_, trade_tab):
                     html.Div(app_state["last_error"] or "None", className="analysis-text"),
                 ],
             ),
+            html.Div(
+                className="analysis-block",
+                children=[
+                    html.Div("Live Intent", className="analysis-label"),
+                    html.Div(
+                        (
+                            f"{app_state.get('live_last_intent_status') or 'No intent yet'} | "
+                            f"{fmt_pacific_time(app_state.get('live_last_intent_at') or '')} | "
+                            f"{app_state.get('live_last_intent_error') or 'No live broker error'}"
+                        ),
+                        className="analysis-text",
+                    ),
+                ],
+            ),
         ],
     )
 
@@ -1452,6 +1495,11 @@ def toggle_modal(open_clicks, close_clicks, store):
     Output("settings-leader-wallet", "value"),
     Output("settings-execution-mode", "value"),
     Output("settings-shadow-extra-slippage-bps", "value"),
+    Output("settings-live-wallet", "value"),
+    Output("settings-live-api-base-url", "value"),
+    Output("settings-live-max-order-usd", "value"),
+    Output("settings-live-price-buffer-bps", "value"),
+    Output("settings-live-trading-enabled", "value"),
     Output("settings-max-exposure", "value"),
     Output("settings-start-balance", "value"),
     Output("settings-cash-balance", "value"),
@@ -1479,6 +1527,11 @@ def sync_modal(store, _):
             no_update,
             no_update,
             no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
         )
     return (
         "modal-overlay" if store["open"] else "modal-overlay hidden",
@@ -1487,6 +1540,11 @@ def sync_modal(store, _):
         settings["leader_wallet_address"],
         settings["execution_mode"],
         settings["shadow_extra_slippage_bps"],
+        settings["live_wallet_address"],
+        settings["live_api_base_url"],
+        settings["live_max_order_usd"],
+        settings["live_price_buffer_bps"],
+        settings["live_trading_enabled"],
         settings["max_total_exposure_usd"],
         settings["paper_starting_balance"],
         settings["paper_cash_balance"],
@@ -1505,6 +1563,11 @@ def sync_modal(store, _):
     State("settings-leader-wallet", "value"),
     State("settings-execution-mode", "value"),
     State("settings-shadow-extra-slippage-bps", "value"),
+    State("settings-live-wallet", "value"),
+    State("settings-live-api-base-url", "value"),
+    State("settings-live-max-order-usd", "value"),
+    State("settings-live-price-buffer-bps", "value"),
+    State("settings-live-trading-enabled", "value"),
     State("settings-max-exposure", "value"),
     State("settings-start-balance", "value"),
     State("settings-cash-balance", "value"),
@@ -1514,7 +1577,7 @@ def sync_modal(store, _):
     State("settings-copy-sells", "value"),
     prevent_initial_call=True,
 )
-def save_settings(_, target_handle, target_wallet, leader_wallet, execution_mode, shadow_extra_slippage_bps, max_exposure, start_balance, cash_balance, slippage_bps, sync_interval, trade_limit, copy_sells):
+def save_settings(_, target_handle, target_wallet, leader_wallet, execution_mode, shadow_extra_slippage_bps, live_wallet, live_api_base_url, live_max_order_usd, live_price_buffer_bps, live_trading_enabled, max_exposure, start_balance, cash_balance, slippage_bps, sync_interval, trade_limit, copy_sells):
     normalized_mode = (execution_mode or "paper").strip().lower()
     normalized_mode = normalized_mode if normalized_mode in {"paper", "shadow", "live"} else "paper"
     updates = {
@@ -1523,6 +1586,11 @@ def save_settings(_, target_handle, target_wallet, leader_wallet, execution_mode
         "leader_wallet_address": (leader_wallet or "").strip(),
         "execution_mode": normalized_mode,
         "shadow_extra_slippage_bps": int(float(shadow_extra_slippage_bps or 0)),
+        "live_wallet_address": (live_wallet or "").strip(),
+        "live_api_base_url": (live_api_base_url or "").strip() or "https://clob.polymarket.com",
+        "live_max_order_usd": float(live_max_order_usd or 0),
+        "live_price_buffer_bps": int(float(live_price_buffer_bps or 0)),
+        "live_trading_enabled": int(float(live_trading_enabled or 0)),
         "max_total_exposure_usd": float(max_exposure or 0),
         "paper_starting_balance": float(start_balance or 0),
         "paper_cash_balance": float(cash_balance or 0),

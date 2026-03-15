@@ -11,6 +11,11 @@ DEFAULT_SETTINGS = {
     "target_wallet": "",
     "leader_wallet_address": "0xBEbe49168Cc3FE33FD9060c6fc83355c3359A8B5",
     "execution_mode": "paper",
+    "live_wallet_address": "",
+    "live_api_base_url": "https://clob.polymarket.com",
+    "live_trading_enabled": 0,
+    "live_max_order_usd": 25.0,
+    "live_price_buffer_bps": 20,
     "sync_interval_ms": 1200,
     "trade_fetch_limit": 10,
     "max_total_exposure_usd": 100.0,
@@ -32,6 +37,9 @@ DEFAULT_APP_STATE = {
     "leader_wallet_value": "0",
     "leader_wallet_updated_at": "",
     "bootstrap_positions_done_at": "",
+    "live_last_intent_at": "",
+    "live_last_intent_status": "",
+    "live_last_intent_error": "",
 }
 
 API_TIMEOUT_SECONDS = 4

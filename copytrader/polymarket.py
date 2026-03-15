@@ -68,6 +68,24 @@ def _parse_json_list(value: Any) -> list[Any]:
     return parsed if isinstance(parsed, list) else []
 
 
+def _best_book_price(levels: Any, *, side: str) -> float:
+    if not isinstance(levels, list):
+        return 0.0
+    parsed_levels: list[float] = []
+    for level in levels:
+        if isinstance(level, dict):
+            price = _to_float(level.get("price"), 0.0)
+        elif isinstance(level, (list, tuple)) and level:
+            price = _to_float(level[0], 0.0)
+        else:
+            price = 0.0
+        if price > 0:
+            parsed_levels.append(price)
+    if not parsed_levels:
+        return 0.0
+    return min(parsed_levels) if side == "BUY" else max(parsed_levels)
+
+
 class PolymarketClient:
     def __init__(self):
         self.session = requests.Session()
@@ -294,6 +312,68 @@ class PolymarketClient:
             if asset_id:
                 books[asset_id] = item
         return books
+
+    def resolve_market_execution_context(self, market_slug: str, outcome: str) -> dict:
+        prices = self.fetch_market_prices([{"market_slug": market_slug, "outcome": outcome}])
+        match = next(
+            (
+                row for row in prices
+                if (row.get("market_slug") or "") == (market_slug or "")
+                and (row.get("outcome") or "") == (outcome or "")
+            ),
+            None,
+        )
+        if not match:
+            raise RuntimeError(f"Could not resolve token metadata for {market_slug} {outcome}.")
+        token_id = _clean_id(match.get("token_id"))
+        if not token_id:
+            raise RuntimeError(f"Missing token_id for {market_slug} {outcome}.")
+        order_book = self.fetch_order_book(token_id)
+        return {
+            "token_id": token_id,
+            "market_slug": match.get("market_slug") or market_slug,
+            "market_title": match.get("market_title") or market_slug,
+            "outcome": match.get("outcome") or outcome,
+            "reference_price": _to_float(match.get("price"), 0.0),
+            "order_book": order_book,
+        }
+
+    def build_live_order_intent(
+        self,
+        *,
+        market_slug: str,
+        outcome: str,
+        side: str,
+        requested_amount_usd: float,
+        price_buffer_bps: float = 0.0,
+    ) -> dict:
+        context = self.resolve_market_execution_context(market_slug, outcome)
+        order_book = context.get("order_book") or {}
+        buffer_fraction = max(float(price_buffer_bps), 0.0) / 10000.0
+        reference_price = _to_float(context.get("reference_price"), 0.0)
+        asks = order_book.get("asks") or []
+        bids = order_book.get("bids") or []
+        book_price = _best_book_price(asks if side == "BUY" else bids, side=side)
+        raw_limit_price = book_price or reference_price or 0.0
+        if raw_limit_price <= 0:
+            raise RuntimeError(f"Missing executable price for {market_slug} {outcome}.")
+        adjusted_price = raw_limit_price * (1 + buffer_fraction) if side == "BUY" else raw_limit_price * (1 - buffer_fraction)
+        limit_price = round(min(max(adjusted_price, 0.01), 0.99), 4)
+        estimated_shares = round(float(requested_amount_usd) / limit_price, 6) if limit_price > 0 else 0.0
+        return {
+            "market_slug": context["market_slug"],
+            "market_title": context["market_title"],
+            "outcome": context["outcome"],
+            "token_id": context["token_id"],
+            "reference_price": round(reference_price or raw_limit_price, 4),
+            "book_price": round(book_price or raw_limit_price, 4),
+            "limit_price": limit_price,
+            "estimated_shares": estimated_shares,
+            "requested_amount_usd": round(float(requested_amount_usd), 2),
+            "side": side,
+            "price_buffer_bps": float(price_buffer_bps),
+            "order_book": order_book,
+        }
 
     def _normalize_trades(self, payload: Any, *, wallet: str, handle: str) -> list[dict]:
         items = payload if isinstance(payload, list) else payload.get("data") or payload.get("items") or payload.get("history") or []
