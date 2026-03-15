@@ -22,6 +22,13 @@ def _to_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _round_market_price(value: Any, default: float = 0.0) -> float:
+    price = _to_float(value, default)
+    if price <= 0:
+        return 0.0
+    return round(price, 2)
+
+
 def _clean_id(value: Any) -> str:
     if value in (None, ""):
         return ""
@@ -236,7 +243,7 @@ class PolymarketClient:
                             "market_slug": market_slug,
                             "market_title": market_title,
                             "outcome": outcome,
-                            "price": _to_float(outcome_prices[index], 0.0),
+                            "price": _round_market_price(outcome_prices[index], 0.0),
                             "condition_id": condition_id,
                             "token_id": token_id,
                             "category": item.get("category") or "",
@@ -494,7 +501,7 @@ class PolymarketClient:
                 or item.get("value"),
                 0.0,
             )
-            live_price = _to_float(
+            live_price = _round_market_price(
                 item.get("outcomePrice")
                 or item.get("curPrice")
                 or item.get("currentPrice")
@@ -502,7 +509,7 @@ class PolymarketClient:
                 or item.get("price"),
                 0.0,
             )
-            derived_price = round(notional_usd / shares, 6) if notional_usd > 0 and shares > 0 else 0.0
+            derived_price = round(notional_usd / shares, 2) if notional_usd > 0 and shares > 0 else 0.0
             price = live_price or derived_price
             market_slug = item.get("marketSlug") or item.get("slug") or item.get("conditionId") or "unknown-market"
             outcome = item.get("outcome") or item.get("token") or item.get("outcomeName") or "UNKNOWN"
