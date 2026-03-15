@@ -24,7 +24,7 @@ BUY_REPLAY_GUARD_SECONDS = 15
 FRESH_FILL_MARK_GRACE_SECONDS = 5
 EXPOSURE_CAP_BUFFER_USD = 30.0
 AUTO_PROFIT_TAKE_THRESHOLD = 0.70
-FULLY_PRICED_EXIT_THRESHOLD = 0.999
+FULLY_PRICED_EXIT_THRESHOLD = 0.98
 RESOLVED_LOSS_PRICE_THRESHOLD = 0.001
 RESOLVED_SWEEP_MAX_POSITIONS = 120
 
@@ -808,7 +808,7 @@ class CopyTradingEngine:
                 )
                 closed += 1
                 continue
-            if current_price >= FULLY_PRICED_EXIT_THRESHOLD:
+            if current_price > FULLY_PRICED_EXIT_THRESHOLD:
                 self._execute_manual_trade(
                     market_slug=position["market_slug"],
                     market_title=position.get("market_title"),
@@ -816,7 +816,7 @@ class CopyTradingEngine:
                     side="SELL",
                     price=current_price,
                     requested_amount_usd=round(float(position.get("market_value") or 0.0), 2),
-                    reason="Resolved market sweep closed winning position at full price.",
+                    reason="Resolved market sweep closed winning position above 98c.",
                     settings=settings,
                     match_strategy="resolved-market-sweep-win",
                 )
@@ -880,7 +880,7 @@ class CopyTradingEngine:
             current_price = price_by_key.get(candidate["position_key"])
             if current_price is None:
                 continue
-            if current_price > RESOLVED_LOSS_PRICE_THRESHOLD and current_price < FULLY_PRICED_EXIT_THRESHOLD:
+            if current_price > RESOLVED_LOSS_PRICE_THRESHOLD and current_price <= FULLY_PRICED_EXIT_THRESHOLD:
                 continue
             requested_amount_usd = 0.0 if current_price <= RESOLVED_LOSS_PRICE_THRESHOLD else round(candidate["shares"] * current_price, 2)
             database.insert_shadow_order(
@@ -1185,7 +1185,7 @@ class CopyTradingEngine:
             row
             for row in database.list_local_positions_marked(self.db_path, source_positions=source_positions)
             if float(row.get("shares") or 0.0) > 0
-            and float(row.get("current_price") or 0.0) >= FULLY_PRICED_EXIT_THRESHOLD
+            and float(row.get("current_price") or 0.0) > FULLY_PRICED_EXIT_THRESHOLD
             and float(row.get("market_value") or 0.0) >= MIN_BET_USD
         ]
         if not positions:
@@ -1203,7 +1203,7 @@ class CopyTradingEngine:
                 side="SELL",
                 price=float(position["current_price"]),
                 requested_amount_usd=market_value,
-                reason="Auto-sold fully priced position at 100c.",
+                reason="Auto-sold position after price moved above 98c.",
                 settings=settings,
                 match_strategy="auto-full-price-exit",
             )
