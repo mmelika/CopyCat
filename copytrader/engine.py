@@ -22,7 +22,6 @@ MAX_TRADE_FETCH_LIMIT = 10
 SOURCE_POSITION_FETCH_LIMIT = 200
 BUY_REPLAY_GUARD_SECONDS = 15
 FRESH_FILL_MARK_GRACE_SECONDS = 5
-EXPOSURE_CAP_BUFFER_USD = 30.0
 AUTO_PROFIT_TAKE_THRESHOLD = 0.70
 FULLY_PRICED_EXIT_THRESHOLD = 0.98
 RESOLVED_LOSS_PRICE_THRESHOLD = 0.001
@@ -135,9 +134,7 @@ def _copy_trade_size(local_equity: float, source_amount_usd: float, leader_walle
 
 def _effective_exposure_cap(settings: dict, portfolio: dict) -> float:
     net_value = max(float(portfolio.get("net_value") or 0.0), 0.0)
-    if net_value <= 100.0:
-        return round(net_value, 2)
-    return round(max(net_value - EXPOSURE_CAP_BUFFER_USD, 0.0), 2)
+    return round(net_value, 2)
 
 
 @dataclass
