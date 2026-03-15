@@ -645,6 +645,53 @@ def render_table(headers, rows):
     )
 
 
+def portfolio_totals_from_analytics(settings: dict, analytics: dict) -> dict:
+    positions = analytics["open_positions"]
+    gross_exposure = round(sum(float(row.get("market_value") or 0.0) for row in positions), 2)
+    cash_balance = float(settings["paper_cash_balance"])
+    realized_pnl = round(sum(float(row.get("realized_pnl") or 0.0) for row in positions), 2)
+    net_value = round(cash_balance + gross_exposure, 2)
+    starting_balance = float(settings["paper_starting_balance"])
+    total_gain = round(net_value - starting_balance, 2)
+    total_gain_pct = round((total_gain / starting_balance) * 100, 2) if starting_balance else 0.0
+    return {
+        "cash_balance": cash_balance,
+        "gross_exposure": gross_exposure,
+        "net_value": net_value,
+        "positions_count": len(positions),
+        "realized_pnl": realized_pnl,
+        "starting_balance": starting_balance,
+        "total_gain": total_gain,
+        "total_gain_pct": total_gain_pct,
+    }
+
+
+def shadow_portfolio_totals_from_analytics(settings: dict, analytics: dict, shadow_orders: list[dict]) -> dict:
+    positions = analytics["open_positions"]
+    gross_exposure = round(sum(float(row.get("market_value") or 0.0) for row in positions), 2)
+    starting_balance = float(settings["paper_starting_balance"])
+    total_buy_notional = round(
+        sum(float(order.get("requested_amount_usd") or 0.0) for order in shadow_orders if order.get("side") == "BUY"),
+        2,
+    )
+    total_sell_proceeds = round(sum(float(row.get("proceeds") or 0.0) for row in analytics["closed_trades"]), 2)
+    cash_balance = round(starting_balance - total_buy_notional + total_sell_proceeds, 2)
+    realized_pnl = round(sum(float(row.get("pnl") or 0.0) for row in analytics["closed_trades"]), 2)
+    net_value = round(cash_balance + gross_exposure, 2)
+    total_gain = round(net_value - starting_balance, 2)
+    total_gain_pct = round((total_gain / starting_balance) * 100, 2) if starting_balance else 0.0
+    return {
+        "cash_balance": cash_balance,
+        "gross_exposure": gross_exposure,
+        "net_value": net_value,
+        "positions_count": len(positions),
+        "realized_pnl": realized_pnl,
+        "starting_balance": starting_balance,
+        "total_gain": total_gain,
+        "total_gain_pct": total_gain_pct,
+    }
+
+
 def portfolio_chart(range_key: str):
     settings = database.get_settings(DB_PATH)
     snapshots, shadow_snapshots = load_snapshots_for_range(range_key)
@@ -843,21 +890,43 @@ def refresh_portfolio_chart(_, range_key):
 def refresh_dashboard(_, trade_tab):
     settings = database.get_settings(DB_PATH)
     app_state = database.get_app_state(DB_PATH)
+    execution_mode = (settings.get("execution_mode") or "paper").strip().lower()
+    shadow_mode_active = execution_mode == "shadow"
     runtime_status, runtime_class, stale_age_seconds = engine_runtime_status(app_state, settings)
     live_positions = database.fetch_live_source_positions(DB_PATH)
-    source_positions = live_positions[:10]
     source_trades = database.list_source_trades(18, DB_PATH)
     copy_orders = database.list_copy_orders(12, DB_PATH)
-    shadow_orders = database.list_shadow_orders(8, DB_PATH)
-    shadow_summary = database.shadow_order_summary(DB_PATH)
     sell_match_rows = database.list_sell_match_audit(12, DB_PATH)
     pending = database.list_pending_source_trades(DB_PATH)
     sync_runs = database.list_sync_runs(12, DB_PATH)
     logs = database.list_logs(14, DB_PATH)
-    portfolio = database.portfolio_totals(DB_PATH, live_positions)
-    shadow_portfolio = database.shadow_portfolio_totals(DB_PATH, live_positions)
     analytics = database.trade_analytics(DB_PATH, live_positions)
-    shadow_analytics = database.shadow_trade_analytics(DB_PATH, live_positions)
+    portfolio = portfolio_totals_from_analytics(settings, analytics)
+    if shadow_mode_active:
+        shadow_orders = database.list_shadow_orders(8, DB_PATH)
+        shadow_summary = database.shadow_order_summary(DB_PATH)
+        shadow_analytics = database.shadow_trade_analytics(DB_PATH, live_positions)
+        shadow_portfolio = shadow_portfolio_totals_from_analytics(settings, shadow_analytics, shadow_orders)
+    else:
+        shadow_orders = []
+        shadow_summary = {
+            "total": 0,
+            "avg_abs_price_delta_bps": 0.0,
+            "max_abs_price_delta_bps": 0.0,
+            "avg_abs_price_delta_cents": 0.0,
+            "total_execution_drag_usd": 0.0,
+        }
+        shadow_analytics = {"open_positions": [], "closed_trades": []}
+        shadow_portfolio = {
+            "cash_balance": float(settings["paper_starting_balance"]),
+            "gross_exposure": 0.0,
+            "net_value": float(settings["paper_starting_balance"]),
+            "positions_count": 0,
+            "realized_pnl": 0.0,
+            "starting_balance": float(settings["paper_starting_balance"]),
+            "total_gain": 0.0,
+            "total_gain_pct": 0.0,
+        }
     daily_performance = database.daily_portfolio_performance(DB_PATH)[:12]
     daily_realized_map = {row["date"]: row["realized_pnl"] for row in analytics["daily_realized"]}
     effective_exposure_cap = _effective_exposure_cap(settings, portfolio)
@@ -1116,28 +1185,26 @@ def refresh_dashboard(_, trade_tab):
     sync_rows = [
         [
             fmt_pacific_time(row["started_at"]),
-            row["status"],
-            str(row["trades_seen"]),
-            str(row["new_trades"]),
-            str(row["copied"]),
-            f"{row['latency_ms']}ms",
+            row.get("status") or "-",
+            str(row.get("trades_seen") or 0),
+            str(row.get("new_trades") or 0),
+            str(row.get("copied") or 0),
+            f"{row.get('latency_ms') or 0}ms",
         ]
         for row in sync_runs
     ] or [["-", "-", "-", "-", "-", "-"]]
     log_rows = [
         [
             fmt_pacific_time(row["ts"]),
-            row["level"],
-            row["component"],
-            row["message"][:48],
+            row.get("level") or "-",
+            row.get("component") or "-",
+            short_text(row.get("message"), 48),
         ]
         for row in logs
     ] or [["-", "-", "-", "-"]]
 
     target_label = f"@{settings['target_handle']}" if settings["target_handle"] else "Wallet target"
     target_wallet = app_state.get("resolved_target_wallet") or settings["target_wallet"] or "Not resolved yet"
-    execution_mode = (settings.get("execution_mode") or "paper").strip().lower()
-    shadow_mode_active = execution_mode == "shadow"
     execution_pill_text = "SHADOW MODE" if shadow_mode_active else "PAPER MODE"
     execution_pill_class = "mode-pill mode-shadow" if shadow_mode_active else "mode-pill mode-paper"
     market_execution = (
