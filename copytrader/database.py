@@ -356,6 +356,30 @@ def list_logs(limit: int = 50, db_path: Path | str = DB_PATH) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def list_reconcile_mismatches(limit: int = 20, db_path: Path | str = DB_PATH) -> list[dict]:
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM logs
+            WHERE component='reconcile'
+              AND message='Source sell did not reduce matched local inventory.'
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    items = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["details"] = json.loads(item.get("details") or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            item["details"] = {}
+        items.append(item)
+    return items
+
+
 def insert_sync_run(status: str = "RUNNING", db_path: Path | str = DB_PATH) -> int:
     with connect(db_path) as conn:
         cur = conn.execute(

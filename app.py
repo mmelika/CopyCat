@@ -278,6 +278,15 @@ def audit_shadow_closed():
         ), 500
 
 
+@server.get("/audit/reconcile")
+def audit_reconcile():
+    try:
+        rows = database.list_reconcile_mismatches(20, DB_PATH)
+        return jsonify({"status": "ok", "count": len(rows), "rows": rows}), 200
+    except Exception as exc:
+        return jsonify({"status": "error", "error": str(exc)}), 500
+
+
 def fmt_currency(value) -> str:
     return f"${float(value):,.2f}"
 
