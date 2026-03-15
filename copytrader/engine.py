@@ -14,6 +14,7 @@ from .config import DB_PATH
 from .polymarket import PolymarketClient
 
 MIN_BET_USD = 0.05
+MIN_SETTLEMENT_USD = 0.01
 MEANINGFUL_MIN_BET_USD = 1.00
 MIN_CASH_RESERVE_PCT = 0.20
 MAX_SINGLE_BET_CASH_PCT = 0.20
@@ -1122,9 +1123,9 @@ class CopyTradingEngine:
             return CopyDecision("skip", "No matching local inventory to sell.")
         price = max(float(trade.get("price") or 0.0), 0.01)
         max_sell_notional = round(float(local_position["shares"]) * price, 2)
-        if max_sell_notional < MIN_BET_USD:
-            return CopyDecision("skip", "Remaining position is too small to sell.")
-        requested_amount = max(requested_amount, MIN_BET_USD)
+        if max_sell_notional < MIN_SETTLEMENT_USD:
+            return CopyDecision("skip", "Remaining position rounds below one cent.")
+        requested_amount = max(requested_amount, MIN_SETTLEMENT_USD)
         requested_amount = min(requested_amount, max_sell_notional)
         requested_amount = _round_up_to_cent(requested_amount) if requested_amount > 0 else 0.0
         return CopyDecision(
