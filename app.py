@@ -498,8 +498,9 @@ def settings_modal():
                                         [
                                             {"label": "Paper only", "value": "paper"},
                                             {"label": "Shadow live estimate", "value": "shadow"},
+                                            {"label": "Live account (Scaffold)", "value": "live"},
                                         ],
-                                        "Paper keeps current behavior. Shadow also logs estimated live fills without placing orders.",
+                                        "Paper keeps current behavior. Shadow logs estimated live fills. Live is wired through the engine but still fail-closed until real order submission is implemented.",
                                     ),
                                     number_field("Shadow Extra Slippage Bps", "settings-shadow-extra-slippage-bps", "15", "Additional simulated slippage applied only to shadow live estimates.", min_value=0, step=1),
                                 ],
@@ -1207,17 +1208,19 @@ def refresh_dashboard(_, trade_tab):
     target_wallet = app_state.get("resolved_target_wallet") or settings["target_wallet"] or "Not resolved yet"
     execution_pill_text = "SHADOW MODE" if shadow_mode_active else "PAPER MODE"
     execution_pill_class = "mode-pill mode-shadow" if shadow_mode_active else "mode-pill mode-paper"
-    market_execution = (
-        f"Shadow +{int(settings.get('shadow_extra_slippage_bps') or 0)}bps"
-        if shadow_mode_active
-        else "Paper simulation"
-    )
-    execution_card_value = "Shadow On" if shadow_mode_active else "Paper Only"
-    execution_card_sub = (
-        f"Parallel live-like portfolio vs paper | {target_label}"
-        if shadow_mode_active
-        else f"No shadow portfolio active | {target_label}"
-    )
+    market_execution = "Paper simulation"
+    execution_card_value = "Paper Only"
+    execution_card_sub = f"No shadow portfolio active | {target_label}"
+    if execution_mode == "live":
+        execution_pill_text = "LIVE MODE"
+        execution_pill_class = "mode-pill mode-live"
+        market_execution = "Live trading scaffold"
+        execution_card_value = "Live Scaffold"
+        execution_card_sub = f"Execution routes to LiveBroker, but live order submission is not implemented yet | {target_label}"
+    elif shadow_mode_active:
+        market_execution = f"Shadow +{int(settings.get('shadow_extra_slippage_bps') or 0)}bps"
+        execution_card_value = "Shadow On"
+        execution_card_sub = f"Parallel live-like portfolio vs paper | {target_label}"
     shadow_delta = round(float(shadow_portfolio["net_value"]) - float(portfolio["net_value"]), 2)
     shadow_delta_text = fmt_signed_currency(shadow_delta)
     shadow_tone = signed_class(shadow_delta)
@@ -1513,7 +1516,7 @@ def sync_modal(store, _):
 )
 def save_settings(_, target_handle, target_wallet, leader_wallet, execution_mode, shadow_extra_slippage_bps, max_exposure, start_balance, cash_balance, slippage_bps, sync_interval, trade_limit, copy_sells):
     normalized_mode = (execution_mode or "paper").strip().lower()
-    normalized_mode = "shadow" if normalized_mode == "shadow" else "paper"
+    normalized_mode = normalized_mode if normalized_mode in {"paper", "shadow", "live"} else "paper"
     updates = {
         "target_handle": (target_handle or "").strip().lstrip("@"),
         "target_wallet": (target_wallet or "").strip(),

@@ -152,6 +152,13 @@ input {
   box-shadow: 0 0 0 6px rgba(255, 191, 71, 0.10);
 }
 
+.mode-live {
+  color: #f6e2d0;
+  background: linear-gradient(180deg, rgba(161, 90, 41, 0.94), rgba(122, 54, 27, 0.92));
+  border-color: rgba(230, 156, 103, 0.34);
+  box-shadow: 0 0 0 6px rgba(161, 90, 41, 0.10);
+}
+
 .status-running {
   color: #87d1ff;
   background: rgba(57, 167, 255, 0.12);

@@ -116,7 +116,7 @@ def _copy_trade_size(local_equity: float, source_amount_usd: float, leader_walle
 
 def _effective_exposure_cap(settings: dict, portfolio: dict) -> float:
     net_value = max(float(portfolio.get("net_value") or 0.0), 0.0)
-    if net_value < 100.0:
+    if net_value <= 100.0:
         return round(net_value, 2)
     return round(max(net_value - EXPOSURE_CAP_BUFFER_USD, 0.0), 2)
 
@@ -379,12 +379,42 @@ class ShadowBroker:
         }
 
 
+class LiveBroker:
+    def __init__(self, client: PolymarketClient):
+        self.client = client
+
+    def execute(self, source_trade: dict, requested_amount_usd: float, settings: dict, db_path=DB_PATH) -> dict:
+        raise RuntimeError(
+            "Live execution mode is scaffolded but real order submission is not implemented. "
+            "Add signed CLOB order placement, fill reconciliation, and live balance tracking before enabling it."
+        )
+
+    def execute_manual(
+        self,
+        *,
+        market_slug: str,
+        market_title: str | None,
+        outcome: str,
+        side: str,
+        price: float,
+        requested_amount_usd: float,
+        reason: str,
+        settings: dict,
+        db_path=DB_PATH,
+    ) -> dict:
+        raise RuntimeError(
+            "Live execution mode is scaffolded but manual live order submission is not implemented. "
+            "Add signed CLOB sell/buy support before using live mode."
+        )
+
+
 class CopyTradingEngine:
     def __init__(self, db_path=DB_PATH):
         self.db_path = db_path
         self.client = PolymarketClient()
         self.broker = PaperBroker()
         self.shadow_broker = ShadowBroker(self.client)
+        self.live_broker = LiveBroker(self.client)
         self._stop_event = threading.Event()
         self._thread = None
         self._lock = threading.Lock()
@@ -582,7 +612,14 @@ class CopyTradingEngine:
 
     def _execution_mode(self, settings: dict) -> str:
         mode = (settings.get("execution_mode") or "paper").strip().lower()
-        return "shadow" if mode == "shadow" else "paper"
+        if mode == "shadow":
+            return "shadow"
+        if mode == "live":
+            return "live"
+        return "paper"
+
+    def _active_broker(self, settings: dict):
+        return self.live_broker if self._execution_mode(settings) == "live" else self.broker
 
     def _record_shadow_preview(self, trade: dict, requested_amount_usd: float, settings: dict) -> dict | None:
         if self._execution_mode(settings) != "shadow":
@@ -597,7 +634,7 @@ class CopyTradingEngine:
             executable_trade["position_key"] = decision.position_key
         if decision.match_strategy:
             executable_trade["match_strategy"] = decision.match_strategy
-        order = self.broker.execute(executable_trade, decision.requested_amount_usd, settings, self.db_path)
+        order = self._active_broker(settings).execute(executable_trade, decision.requested_amount_usd, settings, self.db_path)
         database.insert_copy_order(order, self.db_path)
         shadow_preview = self._record_shadow_preview(executable_trade, decision.requested_amount_usd, settings)
         return order, shadow_preview
@@ -615,7 +652,7 @@ class CopyTradingEngine:
         settings: dict,
         match_strategy: str,
     ) -> tuple[dict, dict | None]:
-        order = self.broker.execute_manual(
+        order = self._active_broker(settings).execute_manual(
             market_slug=market_slug,
             market_title=market_title,
             outcome=outcome,
