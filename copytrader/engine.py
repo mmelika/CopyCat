@@ -132,11 +132,6 @@ def _copy_trade_size(local_equity: float, source_amount_usd: float, leader_walle
     return effective_capacity
 
 
-def _effective_exposure_cap(settings: dict, portfolio: dict) -> float:
-    net_value = max(float(portfolio.get("net_value") or 0.0), 0.0)
-    return round(net_value, 2)
-
-
 @dataclass
 class CopyDecision:
     action: str
@@ -1098,9 +1093,7 @@ class CopyTradingEngine:
         portfolio = database.portfolio_totals(self.db_path, source_positions)
         local_equity = max(float(portfolio["net_value"]), 0.0)
         cash_balance = float(portfolio["cash_balance"])
-        effective_exposure_cap = _effective_exposure_cap(settings, portfolio)
-        remaining_exposure = round(effective_exposure_cap - portfolio["gross_exposure"], 2)
-        buying_capacity = min(float(portfolio["cash_balance"]), remaining_exposure)
+        buying_capacity = float(portfolio["cash_balance"])
         requested_amount = _copy_trade_size(local_equity, trade.get("amount_usd") or 0.0, leader_wallet_value, buying_capacity, cash_balance)
 
         if side == "SELL" and not int(settings["copy_sells"]):
@@ -1294,9 +1287,7 @@ class CopyTradingEngine:
 
         portfolio = database.portfolio_totals(self.db_path, positions)
         remaining_cash = float(portfolio["cash_balance"])
-        effective_exposure_cap = _effective_exposure_cap(settings, portfolio)
-        remaining_exposure = round(effective_exposure_cap - float(portfolio["gross_exposure"]), 2)
-        buying_capacity = min(remaining_cash, remaining_exposure)
+        buying_capacity = remaining_cash
         if buying_capacity < MIN_BET_USD:
             database.set_app_state("bootstrap_positions_done_at", database.utc_now(), self.db_path)
             return 0

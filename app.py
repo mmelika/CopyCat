@@ -11,7 +11,7 @@ from dash import Input, Output, State, callback_context, dcc, html, no_update
 
 from copytrader import database
 from copytrader.config import DB_PATH
-from copytrader.engine import CopyTradingEngine, _effective_exposure_cap
+from copytrader.engine import CopyTradingEngine
 from copytrader.polymarket import PolymarketClient
 
 
@@ -385,7 +385,7 @@ def market_strip():
                     item("Heartbeat", "market-heartbeat"),
                     item("Execution", "market-execution"),
                     item("Sync Cadence", "market-cadence"),
-                    item("Exposure Cap", "market-exposure"),
+                    item("Available Cash", "market-exposure"),
                     item("Leader NAV", "market-leader-nav"),
                 ],
             ),
@@ -621,7 +621,7 @@ def settings_modal():
                             html.Div(
                                 className="modal-row modal-row-2",
                                 children=[
-                                    number_field("Legacy Exposure Setting", "settings-max-exposure", "30", "Unused now. Exposure cap is automatically set to net liquidation value minus $30.", min_value=0, step=0.01),
+                                    number_field("Legacy Exposure Setting", "settings-max-exposure", "30", "Unused legacy field. Buys are now limited only by available cash.", min_value=0, step=0.01),
                                     number_field("Shadow Base Slippage Bps", "settings-slippage-bps", "30", "Execution slippage applied before the extra shadow account adjustment.", min_value=0, step=1),
                                 ],
                             ),
@@ -1034,8 +1034,6 @@ def refresh_dashboard(_, trade_tab):
         else database.daily_portfolio_performance(DB_PATH)[:12]
     )
     daily_realized_map = {row["date"]: row["realized_pnl"] for row in primary_analytics["daily_realized"]}
-    effective_exposure_cap = _effective_exposure_cap(settings, portfolio)
-
     active_positions_value = float(primary_portfolio["gross_exposure"])
     copied_trade_rows = [
         [
@@ -1467,7 +1465,7 @@ def refresh_dashboard(_, trade_tab):
         heartbeat_label(app_state, runtime_status, stale_age_seconds),
         market_execution,
         f"{settings['sync_interval_ms']} ms",
-        fmt_currency(effective_exposure_cap),
+        fmt_currency(primary_portfolio["cash_balance"]),
         fmt_currency(float(app_state.get("leader_wallet_value") or 0.0)),
         execution_card_value,
         execution_card_sub,
