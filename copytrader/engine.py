@@ -231,7 +231,7 @@ class PaperBroker:
 
         if order["side"] == "BUY":
             if cost > cash + 1e-9:
-                raise RuntimeError("Insufficient paper cash balance")
+                raise RuntimeError("Insufficient shadow cash balance")
             new_cash = round(cash - cost, 2)
             existing_shares = float(position["shares"]) if position else 0.0
             existing_cost_basis = round(existing_shares * float(position["avg_price"]), 2) if position else 0.0
@@ -826,7 +826,7 @@ class CopyTradingEngine:
             database.log(
                 "INFO",
                 "reconcile",
-                "Resolved market sweep closed settled paper positions.",
+                "Resolved market sweep closed settled positions.",
                 {"positions_liquidated": closed, "candidates_scanned": len(candidate_rows)},
                 self.db_path,
             )
@@ -922,12 +922,10 @@ class CopyTradingEngine:
         return closed
 
     def _execution_mode(self, settings: dict) -> str:
-        mode = (settings.get("execution_mode") or "paper").strip().lower()
-        if mode == "shadow":
-            return "shadow"
+        mode = (settings.get("execution_mode") or "shadow").strip().lower()
         if mode == "live":
             return "live"
-        return "paper"
+        return "shadow"
 
     def _active_broker(self, settings: dict):
         return self.live_broker if self._execution_mode(settings) == "live" else self.broker
@@ -1175,7 +1173,7 @@ class CopyTradingEngine:
             database.log(
                 "INFO",
                 "rebalance",
-                "Auto-sold paper positions after hitting the profit target.",
+                "Auto-sold shadow positions after hitting the profit target.",
                 {"positions_liquidated": liquidated, "profit_target_pct": AUTO_PROFIT_TAKE_THRESHOLD},
                 self.db_path,
             )
@@ -1214,7 +1212,7 @@ class CopyTradingEngine:
             database.log(
                 "INFO",
                 "rebalance",
-                "Auto-sold fully priced paper positions.",
+                "Auto-sold fully priced shadow positions.",
                 {"positions_liquidated": liquidated, "threshold_price": FULLY_PRICED_EXIT_THRESHOLD},
                 self.db_path,
             )
@@ -1250,7 +1248,7 @@ class CopyTradingEngine:
             database.log(
                 "INFO",
                 "rebalance",
-                "Auto-closed zero-value paper positions.",
+                "Auto-closed zero-value shadow positions.",
                 {"positions_liquidated": liquidated},
                 self.db_path,
             )
@@ -1347,7 +1345,7 @@ class CopyTradingEngine:
             database.log(
                 "INFO",
                 "bootstrap",
-                "Bootstrapped current source positions into local paper inventory.",
+                "Bootstrapped current source positions into local shadow inventory.",
                 {"positions_copied": copied, "bootstrap_time": bootstrap_time},
                 self.db_path,
             )

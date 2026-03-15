@@ -1,15 +1,15 @@
 # CopyPelosi
 
-Standalone Dash platform for paper copy-trading a single Polymarket user, defaulting to `@GamblingIsAllYouNeed`.
+Standalone Dash platform for shadow copy-trading a single Polymarket user, defaulting to `@GamblingIsAllYouNeed`.
 
 ## What it does
 
 - Resolves one Polymarket profile or wallet target.
 - Polls the target's recent trades and positions on a short interval.
 - Collapses bursty same-outcome source fills so one laddered order does not get copied as many separate buys.
-- Stores source activity, sync history, copied orders, local paper positions, and logs in SQLite.
-- Applies copy-trade decisioning for a local paper portfolio with exposure caps and sell controls.
-- Supports a shadow mode that keeps the paper portfolio authoritative while logging estimated live fills for comparison.
+- Stores source activity, sync history, copied orders, shadow fills, local execution state, and logs in SQLite.
+- Applies copy-trade decisioning for a local shadow portfolio with exposure caps and sell controls.
+- Keeps the dashboard focused on the estimated shadow account rather than a dual-portfolio comparison.
 - Renders a monitoring dashboard with live status, tables, charting, logs, and a settings modal.
 
 ## Run
@@ -81,5 +81,5 @@ Suggested daily cron on the server:
 
 - Persistence lives in [data/copytrader.db](/Users/marco/Documents/AI Shit/CopyPelosi/data/copytrader.db) after the first run.
 - On EC2, run the web UI and sync engine as separate services. The web app should not own the long-lived poller.
-- The current execution adapter is paper-only. Shadow mode estimates live fills with configurable extra slippage, but does not sign or submit live orders. A real account executor can replace `PaperBroker` in [copytrader/engine.py](/Users/marco/Documents/AI Shit/CopyPelosi/copytrader/engine.py).
+- The current non-live execution path is shadow-first. Estimated live fills use configurable extra slippage, but the app still does not sign or submit live orders. A real account executor can replace `PaperBroker` in [copytrader/engine.py](/Users/marco/Documents/AI Shit/CopyPelosi/copytrader/engine.py).
 - Public Polymarket endpoints can change. The client in [copytrader/polymarket.py](/Users/marco/Documents/AI Shit/CopyPelosi/copytrader/polymarket.py) tries multiple public API shapes and fails gracefully into logs if resolution or fetches break.

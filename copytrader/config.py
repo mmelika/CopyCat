@@ -10,7 +10,7 @@ DEFAULT_SETTINGS = {
     "target_handle": "GamblingIsAllYouNeed",
     "target_wallet": "",
     "leader_wallet_address": "0xBEbe49168Cc3FE33FD9060c6fc83355c3359A8B5",
-    "execution_mode": "paper",
+    "execution_mode": "shadow",
     "live_wallet_address": "",
     "live_api_base_url": "https://clob.polymarket.com",
     "live_trading_enabled": 0,
