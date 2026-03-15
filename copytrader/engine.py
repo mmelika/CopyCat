@@ -286,6 +286,13 @@ class ShadowBroker:
     def __init__(self, client: PolymarketClient):
         self.client = client
 
+    def _shadow_position(self, source_trade: dict, db_path=DB_PATH) -> dict | None:
+        position_key = source_trade.get("position_key") or f"{source_trade.get('market_slug')}:{source_trade.get('outcome')}"
+        return next(
+            (row for row in database.shadow_trade_analytics(db_path)["open_positions"] if row.get("position_key") == position_key),
+            None,
+        )
+
     def _resolve_market_context(self, source_trade: dict) -> tuple[str, dict]:
         token_id = (source_trade.get("token_id") or "").strip()
         market_context = {}
@@ -330,7 +337,7 @@ class ShadowBroker:
         price_term = live_price * (1 - live_price)
         return round(gross_notional_usd * fee_rate * (price_term**exponent), 6)
 
-    def preview(self, source_trade: dict, requested_amount_usd: float, settings: dict) -> dict:
+    def preview(self, source_trade: dict, requested_amount_usd: float, settings: dict, db_path=DB_PATH) -> dict:
         side = source_trade["side"]
         source_price = max(float(source_trade.get("price") or 0.0), 0.01)
         paper_slippage = float(settings["slippage_bps"]) / 10000.0
@@ -340,6 +347,17 @@ class ShadowBroker:
         paper_price = round(_clamp(paper_price, 0.01, 0.99), 4)
         live_price = round(_clamp(live_price, 0.01, 0.99), 4)
         estimated_live_shares = round(requested_amount_usd / live_price, 6) if live_price > 0 else 0.0
+        liquidation_position = None
+        if side == "SELL" and not source_trade.get("source_trade_id"):
+            liquidation_position = self._shadow_position(source_trade, db_path)
+            if liquidation_position and float(liquidation_position.get("shares") or 0.0) > 0:
+                estimated_live_shares = round(float(liquidation_position.get("shares") or 0.0), 6)
+                if float(source_trade.get("price") or 0.0) <= RESOLVED_LOSS_PRICE_THRESHOLD:
+                    paper_price = 0.0
+                    live_price = 0.0
+                    requested_amount_usd = 0.0
+                else:
+                    requested_amount_usd = round(estimated_live_shares * live_price, 2)
         token_id, market_context = self._resolve_market_context(source_trade)
         fees_enabled = bool(market_context.get("fees_enabled", False))
         fee_rate_bps = self.client.fetch_fee_rate_bps(token_id) if fees_enabled and token_id else 0.0
@@ -356,7 +374,10 @@ class ShadowBroker:
             else:
                 net_proceeds = max(requested_amount_usd - fee_usd, 0.0)
                 effective_live_price = round(net_proceeds / estimated_live_shares, 4) if estimated_live_shares > 0 else live_price
-        effective_live_price = round(_clamp(effective_live_price, 0.01, 0.99), 4)
+        if side == "SELL" and liquidation_position and float(source_trade.get("price") or 0.0) <= RESOLVED_LOSS_PRICE_THRESHOLD:
+            effective_live_price = 0.0
+        else:
+            effective_live_price = round(_clamp(effective_live_price, 0.01, 0.99), 4)
         price_delta_bps = ((live_price - paper_price) / paper_price) * 10000 if paper_price > 0 else 0.0
         if fee_usd > 0 and effective_live_price > 0:
             price_delta_bps = ((effective_live_price - paper_price) / paper_price) * 10000 if paper_price > 0 else 0.0
@@ -823,7 +844,7 @@ class CopyTradingEngine:
     def _record_shadow_preview(self, trade: dict, requested_amount_usd: float, settings: dict) -> dict | None:
         if self._execution_mode(settings) != "shadow":
             return None
-        preview = self.shadow_broker.preview(trade, requested_amount_usd, settings)
+        preview = self.shadow_broker.preview(trade, requested_amount_usd, settings, self.db_path)
         database.insert_shadow_order(preview, self.db_path)
         return preview
 
