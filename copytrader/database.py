@@ -1573,6 +1573,93 @@ def shadow_profit_verification(source_positions: list[dict], db_path: Path | str
     }
 
 
+def shadow_closed_trade_audit(source_positions: list[dict], db_path: Path | str = DB_PATH) -> dict:
+    analytics = shadow_trade_analytics(db_path, source_positions=source_positions)
+    orders = list_all_shadow_orders(db_path)
+    orders_by_side_key: dict[tuple[str, str, str, str], list[dict]] = {}
+    for order in orders:
+        key = (
+            order.get("market_slug") or "",
+            order.get("outcome") or "",
+            order.get("side") or "",
+            order.get("created_at") or "",
+        )
+        orders_by_side_key.setdefault(key, []).append(order)
+
+    closed_rows = []
+    suspicious_rows = []
+    for trade in analytics["closed_trades"]:
+        market_slug = trade.get("market_slug") or ""
+        outcome = trade.get("outcome") or ""
+        entry_time = trade.get("entry_time") or ""
+        exit_time = trade.get("exit_time") or ""
+        shares = round(float(trade.get("shares") or 0.0), 6)
+        entry_candidates = orders_by_side_key.get((market_slug, outcome, "BUY", entry_time), [])
+        exit_candidates = orders_by_side_key.get((market_slug, outcome, "SELL", exit_time), [])
+        entry_order = next(
+            (
+                row for row in entry_candidates
+                if abs(float(row.get("estimated_live_shares") or 0.0) - shares) < 1e-5
+            ),
+            entry_candidates[0] if entry_candidates else None,
+        )
+        exit_order = next(
+            (
+                row for row in exit_candidates
+                if abs(float(row.get("estimated_live_shares") or 0.0) - shares) < 1e-5
+            ),
+            exit_candidates[0] if exit_candidates else None,
+        )
+
+        entry_price = round(float(trade.get("entry_price") or 0.0), 4)
+        exit_price = round(float(trade.get("exit_price") or 0.0), 4)
+        entry_shadow_price = round(float((entry_order or {}).get("estimated_live_price") or 0.0), 4)
+        exit_shadow_price = round(float((exit_order or {}).get("estimated_live_price") or 0.0), 4)
+        entry_price_matches = bool(entry_order) and abs(entry_price - entry_shadow_price) < 0.0001
+        exit_price_matches = bool(exit_order) and abs(exit_price - exit_shadow_price) < 0.0001
+        timestamps_valid = bool(entry_time and exit_time and (_parse_utc(exit_time) or datetime.min.replace(tzinfo=timezone.utc)) >= (_parse_utc(entry_time) or datetime.max.replace(tzinfo=timezone.utc)))
+        price_bounds_valid = 0.0 <= entry_price <= 1.0 and 0.0 <= exit_price <= 1.0
+        legit = timestamps_valid and price_bounds_valid and entry_price_matches and exit_price_matches
+
+        row = {
+            "market_slug": market_slug,
+            "market_title": trade.get("market_title") or "",
+            "outcome": outcome,
+            "shares": shares,
+            "entry_time": entry_time,
+            "exit_time": exit_time,
+            "entry_price": entry_price,
+            "exit_price": exit_price,
+            "pnl": round(float(trade.get("pnl") or 0.0), 2),
+            "proceeds": round(float(trade.get("proceeds") or 0.0), 2),
+            "cost_basis": round(float(trade.get("cost_basis") or 0.0), 2),
+            "entry_source_trade_id": (entry_order or {}).get("source_trade_id") or "",
+            "exit_source_trade_id": (exit_order or {}).get("source_trade_id") or "",
+            "entry_reference_price": round(float((entry_order or {}).get("reference_price") or 0.0), 4),
+            "exit_reference_price": round(float((exit_order or {}).get("reference_price") or 0.0), 4),
+            "entry_shadow_price": entry_shadow_price,
+            "exit_shadow_price": exit_shadow_price,
+            "entry_price_matches_order": entry_price_matches,
+            "exit_price_matches_order": exit_price_matches,
+            "timestamps_valid": timestamps_valid,
+            "price_bounds_valid": price_bounds_valid,
+            "exit_match_strategy": ((exit_order or {}).get("match_strategy") or ""),
+            "exit_status": ((exit_order or {}).get("status") or ""),
+            "legit": legit,
+        }
+        closed_rows.append(row)
+        if not legit:
+            suspicious_rows.append(row)
+
+    return {
+        "closed_trades_count": len(closed_rows),
+        "legit_closed_trades_count": len(closed_rows) - len(suspicious_rows),
+        "suspicious_closed_trades_count": len(suspicious_rows),
+        "closed_trades": closed_rows,
+        "suspicious_closed_trades": suspicious_rows[:100],
+    }
+
+
 def daily_portfolio_performance(db_path: Path | str = DB_PATH) -> list[dict]:
     return _daily_portfolio_performance(list_portfolio_snapshots(db_path, limit=1000))
 

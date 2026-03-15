@@ -247,6 +247,37 @@ def audit_shadow():
         ), 500
 
 
+@server.get("/audit/shadow/closed")
+def audit_shadow_closed():
+    settings = database.get_settings(DB_PATH)
+    app_state = database.get_app_state(DB_PATH)
+    target = settings.get("target_wallet") or settings.get("target_handle") or app_state.get("resolved_target_wallet") or ""
+    client = PolymarketClient()
+
+    try:
+        profile = client.resolve_target_wallet(target)
+        live_positions = client.fetch_positions(profile["wallet"], limit=200)
+        audit = database.shadow_closed_trade_audit(live_positions, DB_PATH)
+        return jsonify(
+            {
+                "status": "ok" if audit["suspicious_closed_trades_count"] == 0 else "warning",
+                "target_wallet": profile["wallet"],
+                "target_handle": profile.get("handle") or settings.get("target_handle") or "",
+                "execution_mode": settings.get("execution_mode") or "paper",
+                "shadow_closed_trade_audit": audit,
+            }
+        ), 200
+    except Exception as exc:
+        return jsonify(
+            {
+                "status": "error",
+                "error": str(exc),
+                "target_wallet": target,
+                "execution_mode": settings.get("execution_mode") or "paper",
+            }
+        ), 500
+
+
 def fmt_currency(value) -> str:
     return f"${float(value):,.2f}"
 

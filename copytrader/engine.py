@@ -653,6 +653,8 @@ class CopyTradingEngine:
             copied += resolved_exits
             if resolved_exits:
                 database.refresh_local_position_market_values(self.db_path, source_positions=positions)
+            shadow_resolved_exits = self._reconcile_resolved_shadow_positions(settings)
+            copied += shadow_resolved_exits
             auto_zero_value_exits = self._liquidate_zero_value_positions(settings, positions)
             copied += auto_zero_value_exits
             if auto_zero_value_exits:
@@ -825,6 +827,95 @@ class CopyTradingEngine:
                 "INFO",
                 "reconcile",
                 "Resolved market sweep closed settled paper positions.",
+                {"positions_liquidated": closed, "candidates_scanned": len(candidate_rows)},
+                self.db_path,
+            )
+        return closed
+
+    def _reconcile_resolved_shadow_positions(self, settings: dict) -> int:
+        if self._execution_mode(settings) != "shadow":
+            return 0
+
+        now = datetime.now(timezone.utc)
+        shadow_positions = database.shadow_trade_analytics(self.db_path)["open_positions"]
+        if not shadow_positions:
+            return 0
+
+        candidate_rows = []
+        today = now.date()
+        for row in shadow_positions:
+            if float(row.get("shares") or 0.0) <= 0:
+                continue
+            market_date = _market_effective_date(row)
+            if market_date is None or market_date > today:
+                continue
+            candidate_rows.append(
+                {
+                    "position_key": row.get("position_key"),
+                    "market_slug": row.get("market_slug"),
+                    "market_title": row.get("market_title"),
+                    "outcome": row.get("outcome"),
+                    "shares": round(float(row.get("shares") or 0.0), 6),
+                    "updated_at": row.get("updated_at") or row.get("entry_time") or "",
+                }
+            )
+
+        if not candidate_rows:
+            return 0
+
+        candidate_rows.sort(key=lambda row: row["updated_at"])
+        candidate_rows = candidate_rows[:RESOLVED_SWEEP_MAX_POSITIONS]
+        market_prices = database.fetch_live_market_prices(candidate_rows, self.db_path)
+        if not market_prices:
+            return 0
+
+        price_by_key = {
+            row["position_key"]: float(row.get("price") or 0.0)
+            for row in market_prices
+            if row.get("position_key")
+        }
+        closed = 0
+        for candidate in candidate_rows:
+            current_price = price_by_key.get(candidate["position_key"])
+            if current_price is None:
+                continue
+            if current_price > RESOLVED_LOSS_PRICE_THRESHOLD and current_price < FULLY_PRICED_EXIT_THRESHOLD:
+                continue
+            requested_amount_usd = 0.0 if current_price <= RESOLVED_LOSS_PRICE_THRESHOLD else round(candidate["shares"] * current_price, 2)
+            database.insert_shadow_order(
+                {
+                    "shadow_order_id": str(uuid.uuid4()),
+                    "source_trade_id": None,
+                    "market_slug": candidate["market_slug"],
+                    "market_title": candidate.get("market_title"),
+                    "outcome": candidate["outcome"],
+                    "side": "SELL",
+                    "requested_amount_usd": requested_amount_usd,
+                    "reference_price": round(current_price, 4),
+                    "paper_price": round(current_price, 4),
+                    "estimated_live_price": round(current_price, 4),
+                    "estimated_live_shares": candidate["shares"],
+                    "price_delta_bps": 0.0,
+                    "price_delta_cents": 0.0,
+                    "execution_drag_usd": 0.0,
+                    "status": "SHADOW",
+                    "created_at": database.utc_now(),
+                    "position_key": candidate["position_key"],
+                    "match_strategy": (
+                        "resolved-shadow-sweep-loss"
+                        if current_price <= RESOLVED_LOSS_PRICE_THRESHOLD
+                        else "resolved-shadow-sweep-win"
+                    ),
+                },
+                self.db_path,
+            )
+            closed += 1
+
+        if closed:
+            database.log(
+                "INFO",
+                "reconcile",
+                "Resolved market sweep closed settled shadow positions.",
                 {"positions_liquidated": closed, "candidates_scanned": len(candidate_rows)},
                 self.db_path,
             )
