@@ -669,9 +669,11 @@ class CopyTradingEngine:
             if auto_liquidated:
                 database.refresh_local_position_market_values(self.db_path, source_positions=positions)
             reconciliation_mismatches = self._reconcile_source_sells(
+                settings=settings,
                 previous_local_positions=previous_local_positions,
                 current_local_positions=database.get_local_positions(self.db_path),
                 source_sell_trades=all_seen_trades,
+                source_positions=positions,
                 copy_start_at=app_state.get("copy_start_at", ""),
             )
             portfolio = database.portfolio_totals(self.db_path, positions)
@@ -1479,9 +1481,11 @@ class CopyTradingEngine:
     def _reconcile_source_sells(
         self,
         *,
+        settings: dict,
         previous_local_positions: list[dict],
         current_local_positions: list[dict],
         source_sell_trades: list[dict],
+        source_positions: list[dict],
         copy_start_at: str,
     ) -> int:
         mismatch_count = 0
@@ -1502,6 +1506,73 @@ class CopyTradingEngine:
             current_shares = float(current_position.get("shares") or 0.0) if current_position else 0.0
             if current_shares < previous_shares - 1e-6:
                 continue
+            marked_position, _ = self._find_matching_marked_local_position(trade, source_positions)
+            current_price = 0.0
+            if marked_position:
+                current_price = float(marked_position.get("current_price") or 0.0)
+            if current_price <= 0:
+                current_price = max(
+                    float(trade.get("price") or 0.0),
+                    float(current_position.get("avg_price") or 0.0) if current_position else 0.0,
+                    float(previous_position.get("avg_price") or 0.0),
+                )
+            market_value = round(float(marked_position.get("market_value") or 0.0), 2) if marked_position else round(current_shares * current_price, 2)
+            if current_shares > 0 and market_value >= MIN_SETTLEMENT_USD and current_price > 0:
+                try:
+                    order, _ = self._execute_manual_trade(
+                        market_slug=previous_position.get("market_slug") or trade.get("market_slug") or "",
+                        market_title=previous_position.get("market_title") or trade.get("market_title"),
+                        outcome=previous_position.get("outcome") or trade.get("outcome") or "",
+                        side="SELL",
+                        price=current_price,
+                        requested_amount_usd=market_value,
+                        reason=f"Reconciled stale source sell {trade.get('source_trade_id')}",
+                        settings=settings,
+                        match_strategy="source-sell-reconcile",
+                    )
+                    database.mark_source_trade(
+                        trade["source_trade_id"],
+                        "copied",
+                        copied_order_id=order["order_id"],
+                        last_error="Reconciled delayed source sell.",
+                        db_path=self.db_path,
+                    )
+                    current_by_key[position_key] = {
+                        **(current_position or previous_position),
+                        "position_key": position_key,
+                        "shares": round(max(current_shares - float(order.get("shares") or 0.0), 0.0), 6),
+                    }
+                    database.log(
+                        "INFO",
+                        "reconcile",
+                        "Reconciled delayed source sell with manual catch-up fill.",
+                        {
+                            "source_trade_id": trade.get("source_trade_id"),
+                            "market_slug": trade.get("market_slug"),
+                            "outcome": trade.get("outcome"),
+                            "position_key": position_key,
+                            "requested_amount_usd": market_value,
+                            "executed_price": round(current_price, 4),
+                        },
+                        self.db_path,
+                    )
+                    continue
+                except Exception as exc:
+                    database.log(
+                        "ERROR",
+                        "reconcile",
+                        "Failed to reconcile delayed source sell with manual catch-up fill.",
+                        {
+                            "source_trade_id": trade.get("source_trade_id"),
+                            "market_slug": trade.get("market_slug"),
+                            "outcome": trade.get("outcome"),
+                            "position_key": position_key,
+                            "market_value": market_value,
+                            "current_price": round(current_price, 4),
+                            "error": str(exc),
+                        },
+                        self.db_path,
+                    )
             mismatch_count += 1
             database.log(
                 "ERROR",
