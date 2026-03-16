@@ -674,6 +674,15 @@ def settings_modal():
                                 className="modal-row modal-row-2",
                                 children=[
                                     select_field(
+                                        "Inferred Sell Fallback",
+                                        "settings-infer-position-delta-sells",
+                                        [
+                                            {"label": "Explicit leader sells only", "value": 0},
+                                            {"label": "Infer sells from positions", "value": 1},
+                                        ],
+                                        "Default is explicit leader sells only. Enable this only if you want missing leader position shares to generate synthetic sell events from position snapshots.",
+                                    ),
+                                    select_field(
                                         "Autonomous Sell Rules",
                                         "settings-allow-autonomous-sells",
                                         [
@@ -1590,6 +1599,7 @@ def toggle_modal(open_clicks, close_clicks, store):
     Output("settings-sync-interval", "value"),
     Output("settings-trade-limit", "value"),
     Output("settings-copy-sells", "value"),
+    Output("settings-infer-position-delta-sells", "value"),
     Output("settings-allow-autonomous-sells", "value"),
     Input("settings-modal-store", "data"),
     Input("refresh-interval", "n_intervals"),
@@ -1599,6 +1609,7 @@ def sync_modal(store, _):
     if store["open"] and callback_context.triggered_id == "refresh-interval":
         return (
             "modal-overlay",
+            no_update,
             no_update,
             no_update,
             no_update,
@@ -1637,6 +1648,7 @@ def sync_modal(store, _):
         settings["sync_interval_ms"],
         settings["trade_fetch_limit"],
         settings["copy_sells"],
+        settings["infer_sells_from_position_deltas"],
         settings["allow_autonomous_sells"],
     )
 
@@ -1661,10 +1673,11 @@ def sync_modal(store, _):
     State("settings-sync-interval", "value"),
     State("settings-trade-limit", "value"),
     State("settings-copy-sells", "value"),
+    State("settings-infer-position-delta-sells", "value"),
     State("settings-allow-autonomous-sells", "value"),
     prevent_initial_call=True,
 )
-def save_settings(_, target_handle, target_wallet, leader_wallet, execution_mode, shadow_extra_slippage_bps, live_wallet, live_api_base_url, live_max_order_usd, live_price_buffer_bps, live_trading_enabled, max_exposure, start_balance, cash_balance, slippage_bps, sync_interval, trade_limit, copy_sells, allow_autonomous_sells):
+def save_settings(_, target_handle, target_wallet, leader_wallet, execution_mode, shadow_extra_slippage_bps, live_wallet, live_api_base_url, live_max_order_usd, live_price_buffer_bps, live_trading_enabled, max_exposure, start_balance, cash_balance, slippage_bps, sync_interval, trade_limit, copy_sells, infer_position_delta_sells, allow_autonomous_sells):
     normalized_mode = (execution_mode or "shadow").strip().lower()
     normalized_mode = normalized_mode if normalized_mode in {"shadow", "live"} else "shadow"
     updates = {
@@ -1685,6 +1698,7 @@ def save_settings(_, target_handle, target_wallet, leader_wallet, execution_mode
         "sync_interval_ms": int(float(sync_interval or 1200)),
         "trade_fetch_limit": min(10, max(1, int(float(trade_limit or 10)))),
         "copy_sells": int(float(copy_sells or 0)),
+        "infer_sells_from_position_deltas": int(float(infer_position_delta_sells or 0)),
         "allow_autonomous_sells": int(float(allow_autonomous_sells or 0)),
     }
     database.update_settings(updates, DB_PATH)

@@ -25,6 +25,7 @@ DEFAULT_SETTINGS = {
     "shadow_extra_slippage_bps": 15,
     "copy_sells": 1,
     "allow_autonomous_sells": 0,
+    "infer_sells_from_position_deltas": 0,
     "auto_run": 1,
 }
 

@@ -21,6 +21,7 @@ If you are searching GitHub for a `Polymarket trading bot`, `Polymarket copy bot
 - `Cash-reserve aware execution`: buys are constrained by deployable cash, not the older exposure-cap logic.
 - `Sell copying controls`: sells can be mirrored or ignored from settings.
 - `Leader-only sells by default`: follower positions now stay open unless the leader reduces, you sell manually, or you explicitly enable autonomous exit rules.
+- `No inferred position-delta sells by default`: temporary position API drops no longer fabricate sell events that can close and immediately reopen a follower trade.
 - `Exact sell matching`: sell reconciliation now matches by market and outcome to avoid stale-position drift.
 - `Burst-trade collapsing`: rapid fills in the same market are merged before copy logic runs.
 - `Bootstrap sync`: the bot can seed local shadow inventory from the leader's current open positions on first run.
@@ -83,6 +84,7 @@ Most runtime settings are editable from the dashboard:
 - shadow starting balance and current cash balance
 - sync interval and trade fetch limit
 - copy-sells on or off
+- explicit leader sells only or optional inferred position-delta sells
 - leader-only sells or optional autonomous exit rules
 - shadow slippage and extra shadow slippage
 - execution mode: `shadow` or guarded `live` scaffold

@@ -1010,13 +1010,15 @@ class CopyTradingEngine:
                 row["position_key"]: row
                 for row in database.list_source_positions(1000, self.db_path)
             }
-            synthetic_sell_trades = self._build_position_reduction_sells(
-                previous_positions,
-                positions,
-                trades,
-                profile["wallet"],
-                profile["handle"],
-            )
+            synthetic_sell_trades = []
+            if self._position_delta_sells_enabled(settings):
+                synthetic_sell_trades = self._build_position_reduction_sells(
+                    previous_positions,
+                    positions,
+                    trades,
+                    profile["wallet"],
+                    profile["handle"],
+                )
             database.replace_source_positions(positions, self.db_path)
             database.refresh_local_position_market_values(self.db_path, source_positions=positions)
             trades_seen = len(trades)
@@ -1324,6 +1326,9 @@ class CopyTradingEngine:
 
     def _autonomous_sells_enabled(self, settings: dict) -> bool:
         return bool(int(settings.get("allow_autonomous_sells") or 0))
+
+    def _position_delta_sells_enabled(self, settings: dict) -> bool:
+        return bool(int(settings.get("infer_sells_from_position_deltas") or 0))
 
     def _active_broker(self, settings: dict):
         return self.live_broker if self._execution_mode(settings) == "live" else self.broker
