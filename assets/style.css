@@ -197,6 +197,7 @@ input {
 
 .btn-outline,
 .btn-accent,
+.btn-danger,
 .btn-ghost {
   cursor: pointer;
   border: 1px solid var(--line);
@@ -226,6 +227,18 @@ input {
 
 .btn-accent:hover {
   background: linear-gradient(180deg, rgba(57, 167, 255, 0.28), rgba(57, 167, 255, 0.16));
+}
+
+.btn-danger {
+  padding: 10px 14px;
+  color: #ffe3e3;
+  background: linear-gradient(180deg, rgba(255, 107, 107, 0.24), rgba(255, 107, 107, 0.14));
+  border-color: rgba(255, 107, 107, 0.36);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.btn-danger:hover {
+  background: linear-gradient(180deg, rgba(255, 107, 107, 0.30), rgba(255, 107, 107, 0.18));
 }
 
 .page {

@@ -349,6 +349,7 @@ def topbar():
                 className="topbar-controls",
                 children=[
                     html.Button("Fresh Start", id="fresh-start-btn", className="btn-outline", n_clicks=0),
+                    html.Button("Liquidate All", id="liquidate-all-btn", className="btn-danger", n_clicks=0),
                     html.Button("Force Sync", id="force-sync-btn", className="btn-outline", n_clicks=0),
                     html.Button("Pause", id="toggle-engine-btn", className="btn-outline", n_clicks=0),
                     html.Button("Settings", id="open-settings-btn", className="btn-accent", n_clicks=0),
@@ -1677,6 +1678,16 @@ def fresh_start(_):
     database.set_app_state("bootstrap_positions_done_at", copy_start_at, DB_PATH)
     database.log("INFO", "reset", "Fresh start requested from dashboard.", {"copy_start_at": copy_start_at}, DB_PATH)
     CopyTradingEngine(DB_PATH).tick(force=True)
+    return 0
+
+
+@app.callback(
+    Output("liquidate-all-btn", "n_clicks"),
+    Input("liquidate-all-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def liquidate_all(_):
+    CopyTradingEngine(DB_PATH).liquidate_all()
     return 0
 
 

@@ -8,7 +8,7 @@ Standalone Dash platform for shadow copy-trading a single Polymarket user, defau
 - Polls the target's recent trades and positions on a short interval.
 - Collapses bursty same-outcome source fills so one laddered order does not get copied as many separate buys.
 - Stores source activity, sync history, copied orders, shadow fills, local execution state, and logs in SQLite.
-- Applies copy-trade decisioning for a local shadow portfolio with exposure caps and sell controls.
+- Applies copy-trade decisioning for a local shadow portfolio and can submit authenticated live CLOB orders when live credentials are configured.
 - Keeps the dashboard focused on the estimated shadow account rather than a dual-portfolio comparison.
 - Renders a monitoring dashboard with live status, tables, charting, logs, and a settings modal.
 
@@ -77,9 +77,33 @@ Suggested daily cron on the server:
 0 3 * * * /home/ec2-user/CopyCat/scripts/backup_db.sh >> /home/ec2-user/CopyCat/backups/backup.log 2>&1
 ```
 
+## Live Trading
+
+Live trading now uses `py-clob-client` and requires authenticated Polymarket CLOB credentials at runtime.
+
+Environment variables:
+
+```bash
+POLYMARKET_PRIVATE_KEY=0x...
+POLYMARKET_CHAIN_ID=137
+POLYMARKET_API_KEY=...
+POLYMARKET_API_SECRET=...
+POLYMARKET_API_PASSPHRASE=...
+POLYMARKET_SIGNATURE_TYPE=...
+POLYMARKET_FUNDER=0x...
+```
+
+Notes:
+
+- `POLYMARKET_PRIVATE_KEY` is required for signed live orders.
+- If API credentials are omitted, the client will attempt to create or derive them from the private key.
+- `POLYMARKET_FUNDER` should usually match the configured live wallet or proxy wallet.
+- `POLYMARKET_SIGNATURE_TYPE` depends on how the wallet is set up on Polymarket. Set it explicitly for proxy-wallet based accounts.
+- The dashboard `Liquidate All` button sells every open position in the active account. In `live` mode it uses the configured live wallet positions.
+
 ## Notes
 
 - Persistence lives in [data/copytrader.db](/Users/marco/Documents/AI Shit/CopyPelosi/data/copytrader.db) after the first run.
 - On EC2, run the web UI and sync engine as separate services. The web app should not own the long-lived poller.
-- The current non-live execution path is shadow-first. Estimated live fills use configurable extra slippage, but the app still does not sign or submit live orders. A real account executor can replace `PaperBroker` in [copytrader/engine.py](/Users/marco/Documents/AI Shit/CopyPelosi/copytrader/engine.py).
+- The current non-live execution path is shadow-first. Live orders require valid CLOB credentials and a trade-enabled Polymarket account.
 - Public Polymarket endpoints can change. The client in [copytrader/polymarket.py](/Users/marco/Documents/AI Shit/CopyPelosi/copytrader/polymarket.py) tries multiple public API shapes and fails gracefully into logs if resolution or fetches break.

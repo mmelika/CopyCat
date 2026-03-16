@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import time
@@ -415,6 +416,8 @@ class ShadowBroker:
 class LiveBroker:
     def __init__(self, client: PolymarketClient):
         self.client = client
+        self._clob_client = None
+        self._clob_client_key = None
 
     def _wallet_address(self, settings: dict) -> str:
         return (settings.get("live_wallet_address") or "").strip()
@@ -431,17 +434,88 @@ class LiveBroker:
         database.set_app_state("live_last_intent_status", order["status"], db_path)
         database.set_app_state("live_last_intent_error", order.get("failure_reason") or "", db_path)
 
+    def _clob_configuration(self, settings: dict) -> dict:
+        private_key = (os.environ.get("POLYMARKET_PRIVATE_KEY") or "").strip()
+        if not private_key:
+            raise RuntimeError("Missing POLYMARKET_PRIVATE_KEY for live trading.")
+        wallet_address = self._ensure_live_configuration(settings)
+        host = (settings.get("live_api_base_url") or "https://clob.polymarket.com").strip().rstrip("/")
+        chain_id = int((os.environ.get("POLYMARKET_CHAIN_ID") or "137").strip() or "137")
+        configured_funder = (os.environ.get("POLYMARKET_FUNDER") or wallet_address).strip()
+        configured_signature_type = (os.environ.get("POLYMARKET_SIGNATURE_TYPE") or "").strip()
+        return {
+            "host": host,
+            "chain_id": chain_id,
+            "private_key": private_key,
+            "wallet_address": wallet_address,
+            "funder": configured_funder,
+            "signature_type": int(configured_signature_type) if configured_signature_type else None,
+            "api_key": (os.environ.get("POLYMARKET_API_KEY") or "").strip(),
+            "api_secret": (os.environ.get("POLYMARKET_API_SECRET") or "").strip(),
+            "api_passphrase": (os.environ.get("POLYMARKET_API_PASSPHRASE") or "").strip(),
+        }
+
+    def _live_client(self, settings: dict):
+        try:
+            from py_clob_client.client import ClobClient
+            from py_clob_client.clob_types import ApiCreds
+        except ImportError as exc:
+            raise RuntimeError("py-clob-client is required for live trading.") from exc
+
+        config = self._clob_configuration(settings)
+        cache_key = (
+            config["host"],
+            config["chain_id"],
+            config["wallet_address"],
+            config["funder"],
+            config["signature_type"],
+            config["api_key"],
+            config["api_secret"],
+            config["api_passphrase"],
+        )
+        if self._clob_client is not None and self._clob_client_key == cache_key:
+            return self._clob_client
+
+        base_client = ClobClient(
+            config["host"],
+            chain_id=config["chain_id"],
+            key=config["private_key"],
+            signature_type=config["signature_type"],
+            funder=config["funder"],
+        )
+        creds = None
+        if config["api_key"] and config["api_secret"] and config["api_passphrase"]:
+            creds = ApiCreds(config["api_key"], config["api_secret"], config["api_passphrase"])
+        else:
+            creds = base_client.create_or_derive_api_creds()
+        base_client.set_api_creds(creds)
+        self._clob_client = base_client
+        self._clob_client_key = cache_key
+        return base_client
+
     def refresh_account_snapshot(self, settings: dict, db_path=DB_PATH) -> dict:
         wallet_address = self._ensure_live_configuration(settings)
         positions = self.client.fetch_positions(wallet_address, limit=200)
         gross_exposure = round(sum(float(item.get("notional_usd") or 0.0) for item in positions), 2)
+        cash_balance = 0.0
+        live_error = ""
+        try:
+            from py_clob_client.clob_types import AssetType, BalanceAllowanceParams
+
+            live_client = self._live_client(settings)
+            balance = live_client.get_balance_allowance(BalanceAllowanceParams(asset_type=AssetType.COLLATERAL))
+            if isinstance(balance, dict):
+                cash_balance = round(float(balance.get("balance") or balance.get("available_balance") or 0.0), 2)
+        except Exception as exc:
+            live_error = str(exc)
         snapshot = {
             "wallet_address": wallet_address,
-            "cash_balance": 0.0,
+            "cash_balance": cash_balance,
             "gross_exposure": gross_exposure,
-            "net_value": gross_exposure,
+            "net_value": round(cash_balance + gross_exposure, 2),
             "positions_count": len(positions),
             "positions": positions,
+            "error": live_error,
         }
         database.snapshot_live_account(
             wallet_address,
@@ -454,8 +528,18 @@ class LiveBroker:
         )
         return snapshot
 
+    def _resolve_live_position(self, settings: dict, market_slug: str, outcome: str, db_path=DB_PATH) -> dict | None:
+        snapshot = self.refresh_account_snapshot(settings, db_path)
+        for position in snapshot.get("positions") or []:
+            if (position.get("market_slug") or "") == (market_slug or "") and (position.get("outcome") or "") == (outcome or ""):
+                return position
+        return None
+
     def execute(self, source_trade: dict, requested_amount_usd: float, settings: dict, db_path=DB_PATH) -> dict:
         wallet_address = self._ensure_live_configuration(settings)
+        live_client = self._live_client(settings)
+        if not bool(int(settings.get("live_trading_enabled") or 0)):
+            raise RuntimeError("Live trading is disabled in settings.")
         intent = self.client.build_live_order_intent(
             market_slug=source_trade.get("market_slug") or "",
             outcome=source_trade.get("outcome") or "",
@@ -464,10 +548,44 @@ class LiveBroker:
             price_buffer_bps=float(settings.get("live_price_buffer_bps") or 0.0),
         )
         max_order_usd = max(float(settings.get("live_max_order_usd") or 0.0), 0.0)
-        status = "BLOCKED"
-        failure_reason = "Live trading disabled."
         if max_order_usd > 0 and float(intent["requested_amount_usd"]) > max_order_usd + 1e-9:
-            failure_reason = f"Requested live order exceeds configured max of ${max_order_usd:.2f}."
+            raise RuntimeError(f"Requested live order exceeds configured max of ${max_order_usd:.2f}.")
+        side = source_trade.get("side") or ""
+        live_order_payload = None
+        try:
+            from py_clob_client.clob_types import MarketOrderArgs, OrderType
+
+            if side == "SELL":
+                sell_shares = float(source_trade.get("shares") or 0.0)
+                if sell_shares <= 0:
+                    live_position = self._resolve_live_position(settings, source_trade.get("market_slug") or "", source_trade.get("outcome") or "", db_path)
+                    sell_shares = float((live_position or {}).get("shares") or 0.0)
+                if sell_shares <= 0:
+                    sell_shares = float(intent.get("estimated_shares") or 0.0)
+                if sell_shares <= 0:
+                    raise RuntimeError("Missing live sell size.")
+                market_args = MarketOrderArgs(
+                    token_id=intent["token_id"],
+                    amount=round(sell_shares, 6),
+                    side=side,
+                    price=float(intent["limit_price"]),
+                    order_type=OrderType.FOK,
+                )
+            else:
+                market_args = MarketOrderArgs(
+                    token_id=intent["token_id"],
+                    amount=float(intent["requested_amount_usd"]),
+                    side=side,
+                    price=float(intent["limit_price"]),
+                    order_type=OrderType.FOK,
+                )
+            signed_order = live_client.create_market_order(market_args)
+            live_order_payload = live_client.post_order(signed_order, OrderType.FOK)
+            status = str((live_order_payload or {}).get("success") or "submitted").upper()
+            failure_reason = ""
+        except Exception as exc:
+            status = "FAILED"
+            failure_reason = str(exc)
         order = {
             "live_order_id": str(uuid.uuid4()),
             "source_trade_id": source_trade.get("source_trade_id"),
@@ -488,14 +606,31 @@ class LiveBroker:
             "reference_price": intent["reference_price"],
             "book_price": intent["book_price"],
             "price_buffer_bps": intent["price_buffer_bps"],
-            "submission_enabled": bool(int(settings.get("live_trading_enabled") or 0)),
+            "submission_enabled": True,
+            "raw_response": live_order_payload or {},
         }
         self._record_live_intent(order, db_path)
         self.refresh_account_snapshot(settings, db_path)
-        raise RuntimeError(
-            "Live order intent prepared and logged, but submission is still blocked. "
-            "Implement signed CLOB order placement before enabling real trading."
-        )
+        if status == "FAILED":
+            raise RuntimeError(failure_reason)
+        return {
+            "order_id": order["live_order_id"],
+            "live_order_id": order["live_order_id"],
+            "source_trade_id": order.get("source_trade_id"),
+            "market_slug": order["market_slug"],
+            "market_title": order.get("market_title"),
+            "outcome": order["outcome"],
+            "side": order["side"],
+            "requested_amount_usd": order["requested_amount_usd"],
+            "executed_price": order["limit_price"],
+            "shares": order["estimated_shares"],
+            "status": "LIVE_SUBMITTED",
+            "failure_reason": None,
+            "created_at": order["created_at"],
+            "position_key": order.get("position_key", ""),
+            "match_strategy": order.get("match_strategy", ""),
+            "raw_json": json.dumps(order.get("raw_response") or {}),
+        }
 
     def execute_manual(
         self,
@@ -510,22 +645,24 @@ class LiveBroker:
         settings: dict,
         db_path=DB_PATH,
     ) -> dict:
-        return self.execute(
-            {
-                "source_trade_id": None,
-                "market_slug": market_slug,
-                "market_title": market_title,
-                "outcome": outcome,
-                "side": side,
-                "price": price,
-                "position_key": "",
-                "match_strategy": "manual-live-intent",
-                "reason": reason,
-            },
-            requested_amount_usd,
-            settings,
-            db_path,
-        )
+        trade = {
+            "source_trade_id": None,
+            "market_slug": market_slug,
+            "market_title": market_title,
+            "outcome": outcome,
+            "side": side,
+            "price": price,
+            "position_key": "",
+            "match_strategy": "manual-live-intent",
+            "reason": reason,
+        }
+        if side == "SELL":
+            live_position = self._resolve_live_position(settings, market_slug, outcome, db_path)
+            if live_position:
+                trade["shares"] = float(live_position.get("shares") or 0.0)
+                if requested_amount_usd <= 0:
+                    requested_amount_usd = round(float(live_position.get("notional_usd") or 0.0), 2)
+        return self.execute(trade, requested_amount_usd, settings, db_path)
 
 
 class CopyTradingEngine:
@@ -940,7 +1077,8 @@ class CopyTradingEngine:
         if decision.match_strategy:
             executable_trade["match_strategy"] = decision.match_strategy
         order = self._active_broker(settings).execute(executable_trade, decision.requested_amount_usd, settings, self.db_path)
-        database.insert_copy_order(order, self.db_path)
+        if self._execution_mode(settings) != "live":
+            database.insert_copy_order(order, self.db_path)
         shadow_preview = self._record_shadow_preview(executable_trade, decision.requested_amount_usd, settings)
         return order, shadow_preview
 
@@ -969,7 +1107,8 @@ class CopyTradingEngine:
             db_path=self.db_path,
         )
         order["match_strategy"] = match_strategy
-        database.insert_copy_order(order, self.db_path)
+        if self._execution_mode(settings) != "live":
+            database.insert_copy_order(order, self.db_path)
         shadow_preview = self._record_shadow_preview(
             {
                 "source_trade_id": None,
@@ -985,6 +1124,59 @@ class CopyTradingEngine:
             settings,
         )
         return order, shadow_preview
+
+    def liquidate_all(self) -> int:
+        with self._lock:
+            settings = database.get_settings(self.db_path)
+            mode = self._execution_mode(settings)
+            if mode == "live":
+                snapshot = self.live_broker.refresh_account_snapshot(settings, self.db_path)
+                positions = snapshot.get("positions") or []
+                liquidated = 0
+                for position in positions:
+                    shares = round(float(position.get("shares") or 0.0), 6)
+                    if shares <= 0:
+                        continue
+                    requested_amount_usd = round(float(position.get("notional_usd") or 0.0), 2)
+                    self.live_broker.execute_manual(
+                        market_slug=position.get("market_slug") or "",
+                        market_title=position.get("market_title"),
+                        outcome=position.get("outcome") or "",
+                        side="SELL",
+                        price=float(position.get("price") or 0.0),
+                        requested_amount_usd=requested_amount_usd,
+                        reason="Dashboard Liquidate All",
+                        settings=settings,
+                        db_path=self.db_path,
+                    )
+                    liquidated += 1
+                database.log("INFO", "rebalance", "Liquidate All requested from dashboard.", {"execution_mode": mode, "positions_liquidated": liquidated}, self.db_path)
+                return liquidated
+
+            source_positions = database.fetch_live_source_positions(self.db_path)
+            positions = [
+                row
+                for row in database.list_local_positions_marked(self.db_path, source_positions=source_positions)
+                if float(row.get("shares") or 0.0) > 0 and float(row.get("market_value") or 0.0) >= MIN_SETTLEMENT_USD
+            ]
+            liquidated = 0
+            for position in positions:
+                self._execute_manual_trade(
+                    market_slug=position["market_slug"],
+                    market_title=position.get("market_title"),
+                    outcome=position["outcome"],
+                    side="SELL",
+                    price=float(position.get("current_price") or 0.0),
+                    requested_amount_usd=round(float(position.get("market_value") or 0.0), 2),
+                    reason="Dashboard Liquidate All",
+                    settings=settings,
+                    match_strategy="manual-liquidate-all",
+                )
+                liquidated += 1
+            if liquidated:
+                database.refresh_local_position_market_values(self.db_path, source_positions=source_positions)
+            database.log("INFO", "rebalance", "Liquidate All requested from dashboard.", {"execution_mode": mode, "positions_liquidated": liquidated}, self.db_path)
+            return liquidated
 
     def _copy_trades_first(self, trades: list[dict], settings: dict, leader_wallet_value: float, source_positions: list[dict]) -> tuple[int, int]:
         copied = 0
