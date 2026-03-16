@@ -320,6 +320,18 @@ def _title_tokens(value: str) -> set[str]:
     return tokens
 
 
+def _normalized_market_title(record: dict) -> str:
+    payload = _record_payload(record)
+    return _normalize_text(
+        record.get("market_title") or payload.get("market_title") or payload.get("marketTitle") or payload.get("title") or ""
+    )
+
+
+def _normalized_outcome_name(record: dict) -> str:
+    payload = _record_payload(record)
+    return _normalize_text(record.get("outcome") or payload.get("outcome") or payload.get("outcomeName") or "")
+
+
 @dataclass
 class CopyDecision:
     action: str
@@ -1953,6 +1965,9 @@ class CopyTradingEngine:
         trade_aliases = _position_aliases(trade)
         matched_position = self._resolve_alias_match(trade, alias_index)
         if not matched_position:
+            same_name_position = self._find_same_name_position(trade, records)
+            if same_name_position:
+                return same_name_position, "same-name-fallback"
             return None, ""
         shared_aliases = trade_aliases.intersection(_position_aliases(matched_position))
         if not shared_aliases:
@@ -1960,6 +1975,34 @@ class CopyTradingEngine:
         matched_alias = sorted(shared_aliases)[0]
         alias_type = matched_alias.split(":", 1)[0]
         return matched_position, f"alias-{alias_type}"
+
+    def _find_same_name_position(self, trade: dict, records: list[dict]) -> dict | None:
+        trade_outcome = _normalized_outcome_name(trade)
+        trade_title = _normalized_market_title(trade)
+        if not trade_outcome or not trade_title:
+            return None
+
+        candidates = []
+        for record in records:
+            if float(record.get("shares") or 0.0) <= 0:
+                continue
+            if _normalized_outcome_name(record) != trade_outcome:
+                continue
+            record_title = _normalized_market_title(record)
+            if record_title != trade_title or not record_title:
+                continue
+            candidates.append(record)
+
+        if not candidates:
+            return None
+
+        return max(
+            candidates,
+            key=lambda row: (
+                float(row.get("shares") or 0.0),
+                float(row.get("notional_usd") or row.get("market_value") or 0.0),
+            ),
+        )
 
     def _reconcile_source_sells(
         self,
