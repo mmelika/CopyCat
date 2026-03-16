@@ -1,172 +1,147 @@
-# CopyCat 🐱
+# CopyPelosi
 
-> **Paper-trade alongside the best Polymarket traders — in real time.**
+Polymarket copy trading bot and monitoring dashboard for mirroring a single trader into a local shadow portfolio.
 
-CopyCat is an open-source TypeScript bot that monitors a target user's Polymarket trades via WebSocket and automatically mirrors them proportionally into a virtual portfolio, with a live local dashboard.
+If you are searching GitHub for a `Polymarket trading bot`, `Polymarket copy bot`, or `Polymarket copy trading bot`, this repo is built for that workflow: watch one Polymarket account, size copy trades off the leader's activity, track paper performance, and audit the copy logic from a live dashboard.
 
-No real funds. No risk. Just signal.
+## What This Bot Does
 
----
+- Follows one Polymarket handle or wallet and resolves the profile automatically.
+- Polls recent trades and open positions on a short sync cadence.
+- Mirrors buys and sells into a local shadow account with proportional sizing.
+- Stores source trades, copied orders, shadow orders, local positions, sync runs, snapshots, and logs in SQLite.
+- Runs a Dash dashboard with status, charts, open positions, closed trades, target trade feed, sell-match audit tables, execution comparison, and engine logs.
+- Exposes health and audit endpoints for profit verification, shadow verification, closed-trade checks, and reconciliation mismatches.
 
-## What It Does
+## Current Feature Set
 
-- **Monitors** a target Polymarket trader's activity in real time via the CLOB WebSocket API (~100ms latency)
-- **Mirrors** every trade proportionally — if the target bets 10% of their portfolio, you paper-trade 10% of yours
-- **Tracks** your virtual portfolio with unrealized P&L, open positions, and a live trade feed
-- **Displays** everything on a zero-dependency local dashboard at `localhost:3000`
+- `Shadow copy trading`: the default mode paper-trades a Polymarket account without putting capital at risk.
+- `Proportional sizing`: buy size is based on the leader account value versus your local shadow equity.
+- `Correlation-aware sizing`: correlated or high-conviction buys can use more of the available shadow cash.
+- `Cash-reserve aware execution`: buys are constrained by deployable cash, not the older exposure-cap logic.
+- `Sell copying controls`: sells can be mirrored or ignored from settings.
+- `Exact sell matching`: sell reconciliation now matches by market and outcome to avoid stale-position drift.
+- `Burst-trade collapsing`: rapid fills in the same market are merged before copy logic runs.
+- `Bootstrap sync`: the bot can seed local shadow inventory from the leader's current open positions on first run.
+- `Resolved-market cleanup`: resolved losers can be swept to zero and nearly fully priced winners can auto-exit above 98c.
+- `Growth milestone liquidation`: the shadow portfolio can fully liquidate after holding above each +50% portfolio milestone for a stability window.
+- `Manual controls`: pause, force sync, fresh start, and liquidate-all are available from the dashboard.
+- `Audit tooling`: `/healthz`, `/audit/profit`, `/audit/shadow`, `/audit/shadow/closed`, and `/audit/reconcile` help verify the bot's state.
+- `Live execution scaffold`: there is a guarded Polymarket CLOB order-intent path and live account reconciliation, but this should be treated as non-production.
 
----
+## What This Repo Is Not
 
-## Demo
+- Not a multi-wallet copy trading platform.
+- Not a backtester.
+- Not a finished production live-trading system.
+- Not using the older exposure-cap system anymore; that setting is legacy and unused.
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  CopyCat — @GamblingIsAllYouNeed          ● LIVE        │
-├─────────────────────────────────────────────────────────┤
-│  Portfolio: $1,000.00   P&L: +$42.30 (+4.2%)  [Reset]  │
-├─────────────────────────────────────────────────────────┤
-│  OPEN POSITIONS                                         │
-│  Market              Side  Shares  Avg Price  Value     │
-│  ─────────────────── ────  ──────  ─────────  ──────    │
-│  Will Trump win...   YES   120     $0.62      $74.40    │
-├─────────────────────────────────────────────────────────┤
-│  TRADE FEED                                             │
-│  12:04:01  BUY  YES  "Will Trump..."   $50 @ 0.62      │
-└─────────────────────────────────────────────────────────┘
-```
+## Stack
 
----
+- Python
+- Dash + Plotly
+- SQLite
+- Requests
+- `py-clob-client` for the guarded live-order scaffold
 
-## Architecture
+## Dashboard
 
-```
-┌─────────────────────────────────────────────────────┐
-│                TypeScript / Node.js                  │
-│                                                     │
-│  ┌──────────────┐    ┌───────────────────────────┐  │
-│  │ WS Monitor   │───▶│  Paper Trade Engine       │  │
-│  │              │    │  - Proportional sizing    │  │
-│  │ Polymarket   │    │  - Virtual portfolio      │  │
-│  │ CLOB WS API  │    │  - P&L tracking           │  │
-│  └──────────────┘    └──────────────┬────────────┘  │
-│                                     │               │
-│                      ┌──────────────▼────────────┐  │
-│                      │  Express + SSE Dashboard  │  │
-│                      │  localhost:3000            │  │
-│                      └───────────────────────────┘  │
-└─────────────────────────────────────────────────────┘
-         │ WebSocket
-         ▼
-  wss://clob.polymarket.com
-```
+The local UI is built for operating a Polymarket shadow trading bot in real time:
 
-| Module | Responsibility |
-|--------|---------------|
-| `src/monitor.ts` | WebSocket client — connects to Polymarket CLOB WS, filters target user's trades |
-| `src/engine.ts` | Paper trade engine — virtual portfolio, proportional sizing, P&L |
-| `src/server.ts` | Express server — serves dashboard, streams updates via SSE |
-| `src/dashboard/index.html` | Zero-dependency UI — positions table, trade feed, live P&L |
-| `src/config.ts` | Central config — target user, starting balance, API URLs |
+- top-bar runtime status, heartbeat, execution mode, and control buttons
+- shadow portfolio breakdown and realized performance
+- 1D, 1W, 1M, and all-time portfolio curves
+- open-position and closed-trade views
+- target trade feed and copied-order history
+- sell-match auditing and reconciliation visibility
+- sync history and engine logs
+- settings modal for target, sync cadence, slippage, shadow cash, and execution mode
 
----
-
-## Quick Start
-
-**Prerequisites:** Node.js 18+
+## Run Locally
 
 ```bash
-git clone https://github.com/yourusername/copycat.git
-cd copycat
-npm install
-npm start
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python3 app.py
 ```
 
-Then open `http://localhost:3000`.
+Open [http://127.0.0.1:8050](http://127.0.0.1:8050).
 
----
+To run the sync worker separately instead of inside the web process:
 
-## How Proportional Sizing Works
-
-When the target trader makes a trade:
-
+```bash
+python3 run_engine.py
 ```
-ourSize = (targetTradeSize / targetPortfolioValue) × ourVirtualBalance
-```
-
-**Example:** Target has $5,000 portfolio and bets $500 (10%). You have $1,000. You paper-trade $100.
-
-This keeps position sizing relative regardless of portfolio size difference.
-
----
 
 ## Configuration
 
-Edit `src/config.ts`:
+Most runtime settings are editable from the dashboard:
 
-```ts
-export const config = {
-  TARGET_USERNAME: 'GamblingIsAllYouNeed',  // Polymarket username to follow
-  STARTING_BALANCE: 1000,                   // Virtual USDC starting balance
-  DASHBOARD_PORT: 3000,                     // Local dashboard port
-  WS_RECONNECT_BASE_MS: 1000,              // Reconnect backoff (exponential)
-  WS_RECONNECT_MAX_MS: 30000,
-} as const;
-```
+- target Polymarket handle or wallet
+- reference leader wallet for sizing
+- shadow starting balance and current cash balance
+- sync interval and trade fetch limit
+- copy-sells on or off
+- shadow slippage and extra shadow slippage
+- execution mode: `shadow` or guarded `live` scaffold
 
----
+Defaults are seeded from [`copytrader/config.py`](copytrader/config.py).
 
-## Resilience
+## Operations
 
-| Scenario | Behavior |
-|----------|----------|
-| WebSocket disconnect | Auto-reconnect with exponential backoff (1s → 2s → 4s → max 30s) |
-| Target user not found | Crash on startup with a clear error message |
-| Malformed trade event | Log and skip — never crashes the bot |
-| Network blip | Dashboard shows `● RECONNECTING`, resumes automatically |
-
----
-
-## Tech Stack
-
-| Layer | Tech |
-|-------|------|
-| Runtime | Node.js + TypeScript |
-| WebSocket | `ws` |
-| HTTP / SSE | `express` |
-| Dashboard | Vanilla HTML — no build step |
-| Polymarket data | Gamma REST API + CLOB WebSocket |
-| Tests | Jest + ts-jest |
-
----
-
-## Development
+Health check:
 
 ```bash
-npm run dev    # Watch mode with ts-node
-npm test       # Run test suite (Jest)
-npm run build  # Compile to dist/
+curl http://127.0.0.1:8050/healthz
 ```
 
-Test coverage targets: Gamma API client, paper trade engine, WebSocket parser.
+Audit endpoints:
 
----
+```bash
+curl http://127.0.0.1:8050/audit/profit
+curl http://127.0.0.1:8050/audit/shadow
+curl http://127.0.0.1:8050/audit/shadow/closed
+curl http://127.0.0.1:8050/audit/reconcile
+```
 
-## Roadmap
+Backup the database:
 
-- [ ] Real trading via Polymarket CLOB API + wallet signing
-- [ ] Follow multiple traders simultaneously
-- [ ] Stop-loss and max position size limits
-- [ ] Historical backtest mode against past trade data
-- [ ] Configurable target via CLI arg or `.env`
+```bash
+bash scripts/backup_db.sh
+```
 
----
+Persistence lives in [`data/copytrader.db`](data/copytrader.db).
+
+## Deploy
+
+This repo includes EC2 deployment helpers for running the web UI and sync engine as separate services:
+
+- [`deploy/bootstrap_ec2.sh`](deploy/bootstrap_ec2.sh)
+- [`deploy/copycat.service`](deploy/copycat.service)
+- [`deploy/copycat-engine.service`](deploy/copycat-engine.service)
+- [`deploy/nginx-copycat.conf`](deploy/nginx-copycat.conf)
+- [`wsgi.py`](wsgi.py)
+
+Typical flow:
+
+```bash
+git clone https://github.com/mmelika/CopyCat.git
+cd CopyCat
+bash deploy/bootstrap_ec2.sh
+```
+
+## SEO Notes
+
+Relevant search phrases this project genuinely fits:
+
+- Polymarket trading bot
+- Polymarket copy trading bot
+- Polymarket copy bot
+- Polymarket shadow trading bot
+- Polymarket paper trading bot
+- Polymarket trader mirror bot
 
 ## Disclaimer
 
-CopyCat is a **paper trading research tool**. It does not execute real trades or handle real funds. Past performance of any tracked trader is not indicative of future results. Use at your own risk.
-
----
-
-## License
-
-MIT
+This is a research and monitoring tool. Shadow mode is the primary supported path. If you experiment with the live scaffold, treat it as unfinished and review the code closely before trusting it with capital.
