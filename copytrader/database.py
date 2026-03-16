@@ -319,6 +319,48 @@ def update_settings(values: dict, db_path: Path | str = DB_PATH) -> None:
             )
 
 
+def reserve_paper_cash(amount: float, db_path: Path | str = DB_PATH) -> float:
+    amount = round(max(float(amount or 0.0), 0.0), 2)
+    with connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key='paper_cash_balance'"
+        ).fetchone()
+        current_cash = float(row["value"]) if row else 0.0
+        if amount > current_cash + 1e-9:
+            raise RuntimeError("Insufficient shadow cash balance")
+        new_cash = round(max(current_cash - amount, 0.0), 2)
+        conn.execute(
+            """
+            INSERT INTO settings(key, value, updated_at)
+            VALUES ('paper_cash_balance', ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+            """,
+            (str(new_cash), utc_now()),
+        )
+    return new_cash
+
+
+def credit_paper_cash(amount: float, db_path: Path | str = DB_PATH) -> float:
+    amount = round(max(float(amount or 0.0), 0.0), 2)
+    with connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key='paper_cash_balance'"
+        ).fetchone()
+        current_cash = float(row["value"]) if row else 0.0
+        new_cash = round(current_cash + amount, 2)
+        conn.execute(
+            """
+            INSERT INTO settings(key, value, updated_at)
+            VALUES ('paper_cash_balance', ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+            """,
+            (str(new_cash), utc_now()),
+        )
+    return new_cash
+
+
 def get_app_state(db_path: Path | str = DB_PATH) -> dict:
     with connect(db_path) as conn:
         rows = conn.execute("SELECT key, value FROM app_state").fetchall()

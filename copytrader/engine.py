@@ -241,15 +241,12 @@ class PaperBroker:
 
     def _apply_fill(self, order: dict, db_path=DB_PATH) -> None:
         settings = database.get_settings(db_path)
-        cash = float(settings["paper_cash_balance"])
         position_key = order.get("position_key") or f"{order['market_slug']}:{order['outcome']}"
         position = database.get_local_position(position_key, db_path)
         cost = round(order["requested_amount_usd"], 2)
 
         if order["side"] == "BUY":
-            if cost > cash + 1e-9:
-                raise RuntimeError("Insufficient shadow cash balance")
-            new_cash = round(cash - cost, 2)
+            database.reserve_paper_cash(cost, db_path)
             existing_shares = float(position["shares"]) if position else 0.0
             existing_cost_basis = round(existing_shares * float(position["avg_price"]), 2) if position else 0.0
             new_shares = existing_shares + order["shares"]
@@ -270,7 +267,6 @@ class PaperBroker:
                 },
                 db_path,
             )
-            database.update_settings({"paper_cash_balance": new_cash}, db_path)
             return
 
         if not position or float(position["shares"]) <= 0:
@@ -296,7 +292,7 @@ class PaperBroker:
             },
             db_path,
         )
-        database.update_settings({"paper_cash_balance": round(cash + proceeds, 2)}, db_path)
+        database.credit_paper_cash(proceeds, db_path)
 
 
 class ShadowBroker:
