@@ -20,11 +20,11 @@ If you are searching GitHub for a `Polymarket trading bot`, `Polymarket copy bot
 - `Correlation-aware sizing`: correlated or high-conviction buys can use more of the available shadow cash.
 - `Cash-reserve aware execution`: buys are constrained by deployable cash, not the older exposure-cap logic.
 - `Sell copying controls`: sells can be mirrored or ignored from settings.
+- `Leader-only sells by default`: follower positions now stay open unless the leader reduces, you sell manually, or you explicitly enable autonomous exit rules.
 - `Exact sell matching`: sell reconciliation now matches by market and outcome to avoid stale-position drift.
 - `Burst-trade collapsing`: rapid fills in the same market are merged before copy logic runs.
 - `Bootstrap sync`: the bot can seed local shadow inventory from the leader's current open positions on first run.
-- `Resolved-market cleanup`: resolved losers can be swept to zero and nearly fully priced winners can auto-exit above 98c.
-- `Growth milestone liquidation`: the shadow portfolio can fully liquidate after net liquidation value holds above each +50% portfolio milestone for a stability window.
+- `Optional autonomous exits`: resolved losers can be swept to zero, nearly fully priced winners can auto-exit above 98c, and growth-milestone liquidation can run only when you enable autonomous sell rules.
 - `Manual controls`: pause, force sync, fresh start, liquidate-all, and per-position sell buttons are available from the dashboard.
 - `Audit tooling`: `/healthz`, `/audit/profit`, `/audit/shadow`, `/audit/shadow/closed`, and `/audit/reconcile` help verify the bot's state.
 - `Live execution scaffold`: there is a guarded Polymarket CLOB order-intent path and live account reconciliation, but this should be treated as non-production.
@@ -83,6 +83,7 @@ Most runtime settings are editable from the dashboard:
 - shadow starting balance and current cash balance
 - sync interval and trade fetch limit
 - copy-sells on or off
+- leader-only sells or optional autonomous exit rules
 - shadow slippage and extra shadow slippage
 - execution mode: `shadow` or guarded `live` scaffold
 

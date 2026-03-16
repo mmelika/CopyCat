@@ -74,6 +74,8 @@ def fmt_pacific_short(value: str) -> str:
 
 
 def milestone_liquidation_summary(settings: dict, app_state: dict, net_liquidation_value: float) -> tuple[str, str]:
+    if not int(settings.get("allow_autonomous_sells") or 0):
+        return ("Disabled", "Autonomous exits are off; follower sells only track leader reductions or manual actions.")
     starting_balance = round(float(settings.get("paper_starting_balance") or 0.0), 2)
     stored_target = round(float(app_state.get("milestone_liquidation_target") or 0.0), 2)
     next_target = stored_target if stored_target > 0 else round(starting_balance * (1 + PORTFOLIO_GROWTH_STEP_PCT), 2)
@@ -665,6 +667,20 @@ def settings_modal():
                                             {"label": "Ignore sells", "value": 0},
                                         ],
                                         "Whether sell events from the followed account should reduce local positions.",
+                                    ),
+                                ],
+                            ),
+                            html.Div(
+                                className="modal-row modal-row-2",
+                                children=[
+                                    select_field(
+                                        "Autonomous Sell Rules",
+                                        "settings-allow-autonomous-sells",
+                                        [
+                                            {"label": "Leader-only sells", "value": 0},
+                                            {"label": "Allow autonomous exits", "value": 1},
+                                        ],
+                                        "Default is leader-only sells. Enable this only if you want resolved-market sweeps, 98c exits, and growth-milestone liquidations to close positions without a leader sell.",
                                     ),
                                 ],
                             ),
@@ -1574,6 +1590,7 @@ def toggle_modal(open_clicks, close_clicks, store):
     Output("settings-sync-interval", "value"),
     Output("settings-trade-limit", "value"),
     Output("settings-copy-sells", "value"),
+    Output("settings-allow-autonomous-sells", "value"),
     Input("settings-modal-store", "data"),
     Input("refresh-interval", "n_intervals"),
 )
@@ -1582,6 +1599,7 @@ def sync_modal(store, _):
     if store["open"] and callback_context.triggered_id == "refresh-interval":
         return (
             "modal-overlay",
+            no_update,
             no_update,
             no_update,
             no_update,
@@ -1619,6 +1637,7 @@ def sync_modal(store, _):
         settings["sync_interval_ms"],
         settings["trade_fetch_limit"],
         settings["copy_sells"],
+        settings["allow_autonomous_sells"],
     )
 
 
@@ -1642,9 +1661,10 @@ def sync_modal(store, _):
     State("settings-sync-interval", "value"),
     State("settings-trade-limit", "value"),
     State("settings-copy-sells", "value"),
+    State("settings-allow-autonomous-sells", "value"),
     prevent_initial_call=True,
 )
-def save_settings(_, target_handle, target_wallet, leader_wallet, execution_mode, shadow_extra_slippage_bps, live_wallet, live_api_base_url, live_max_order_usd, live_price_buffer_bps, live_trading_enabled, max_exposure, start_balance, cash_balance, slippage_bps, sync_interval, trade_limit, copy_sells):
+def save_settings(_, target_handle, target_wallet, leader_wallet, execution_mode, shadow_extra_slippage_bps, live_wallet, live_api_base_url, live_max_order_usd, live_price_buffer_bps, live_trading_enabled, max_exposure, start_balance, cash_balance, slippage_bps, sync_interval, trade_limit, copy_sells, allow_autonomous_sells):
     normalized_mode = (execution_mode or "shadow").strip().lower()
     normalized_mode = normalized_mode if normalized_mode in {"shadow", "live"} else "shadow"
     updates = {
@@ -1665,6 +1685,7 @@ def save_settings(_, target_handle, target_wallet, leader_wallet, execution_mode
         "sync_interval_ms": int(float(sync_interval or 1200)),
         "trade_fetch_limit": min(10, max(1, int(float(trade_limit or 10)))),
         "copy_sells": int(float(copy_sells or 0)),
+        "allow_autonomous_sells": int(float(allow_autonomous_sells or 0)),
     }
     database.update_settings(updates, DB_PATH)
     database.log("INFO", "settings", "Settings updated from dashboard.", updates, DB_PATH)

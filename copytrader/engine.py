@@ -1041,24 +1041,25 @@ class CopyTradingEngine:
             failed += backlog_failed
             copied += bootstrap_copied
             database.refresh_local_position_market_values(self.db_path, freeze_recent_seconds=FRESH_FILL_MARK_GRACE_SECONDS, source_positions=positions)
-            resolved_exits = self._reconcile_resolved_positions(settings)
-            copied += resolved_exits
-            if resolved_exits:
-                database.refresh_local_position_market_values(self.db_path, source_positions=positions)
-            shadow_resolved_exits = self._reconcile_resolved_shadow_positions(settings)
-            copied += shadow_resolved_exits
-            auto_zero_value_exits = self._liquidate_zero_value_positions(settings, positions)
-            copied += auto_zero_value_exits
-            if auto_zero_value_exits:
-                database.refresh_local_position_market_values(self.db_path, source_positions=positions)
-            milestone_liquidations = self._liquidate_positions_at_growth_milestone(settings, positions)
-            copied += milestone_liquidations
-            if milestone_liquidations:
-                database.refresh_local_position_market_values(self.db_path, source_positions=positions)
-            auto_liquidated = self._liquidate_fully_priced_positions(settings, positions)
-            copied += auto_liquidated
-            if auto_liquidated:
-                database.refresh_local_position_market_values(self.db_path, source_positions=positions)
+            if self._autonomous_sells_enabled(settings):
+                resolved_exits = self._reconcile_resolved_positions(settings)
+                copied += resolved_exits
+                if resolved_exits:
+                    database.refresh_local_position_market_values(self.db_path, source_positions=positions)
+                shadow_resolved_exits = self._reconcile_resolved_shadow_positions(settings)
+                copied += shadow_resolved_exits
+                auto_zero_value_exits = self._liquidate_zero_value_positions(settings, positions)
+                copied += auto_zero_value_exits
+                if auto_zero_value_exits:
+                    database.refresh_local_position_market_values(self.db_path, source_positions=positions)
+                milestone_liquidations = self._liquidate_positions_at_growth_milestone(settings, positions)
+                copied += milestone_liquidations
+                if milestone_liquidations:
+                    database.refresh_local_position_market_values(self.db_path, source_positions=positions)
+                auto_liquidated = self._liquidate_fully_priced_positions(settings, positions)
+                copied += auto_liquidated
+                if auto_liquidated:
+                    database.refresh_local_position_market_values(self.db_path, source_positions=positions)
             reconciliation_mismatches = self._reconcile_source_sells(
                 settings=settings,
                 previous_local_positions=previous_local_positions,
@@ -1320,6 +1321,9 @@ class CopyTradingEngine:
         if mode == "live":
             return "live"
         return "shadow"
+
+    def _autonomous_sells_enabled(self, settings: dict) -> bool:
+        return bool(int(settings.get("allow_autonomous_sells") or 0))
 
     def _active_broker(self, settings: dict):
         return self.live_broker if self._execution_mode(settings) == "live" else self.broker
