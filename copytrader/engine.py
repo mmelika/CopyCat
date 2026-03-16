@@ -8,7 +8,7 @@ import time
 import uuid
 import math
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from . import database
 from .config import DB_PATH
@@ -29,10 +29,53 @@ RESOLVED_SWEEP_MAX_POSITIONS = 120
 PORTFOLIO_GROWTH_STEP_PCT = 0.50
 PORTFOLIO_GROWTH_STABILITY_SECONDS = 15
 HIGH_CONVICTION_TRADE_USD = 1000.0
+MAX_BUY_EXPIRY_HOURS = 24
 TITLE_STOPWORDS = {
     "vs", "will", "win", "on", "the", "and", "for", "set", "game", "games",
     "totals", "total", "winner", "match", "team", "over", "under", "draw",
     "ou", "yes", "no", "to",
+}
+MONTH_NAME_TO_NUMBER = {
+    "jan": 1,
+    "january": 1,
+    "feb": 2,
+    "february": 2,
+    "mar": 3,
+    "march": 3,
+    "apr": 4,
+    "april": 4,
+    "may": 5,
+    "jun": 6,
+    "june": 6,
+    "jul": 7,
+    "july": 7,
+    "aug": 8,
+    "august": 8,
+    "sep": 9,
+    "sept": 9,
+    "september": 9,
+    "oct": 10,
+    "october": 10,
+    "nov": 11,
+    "november": 11,
+    "dec": 12,
+    "december": 12,
+}
+TIMEZONE_OFFSETS = {
+    "utc": timezone.utc,
+    "gmt": timezone.utc,
+    "et": timezone(timedelta(hours=-5)),
+    "est": timezone(timedelta(hours=-5)),
+    "edt": timezone(timedelta(hours=-4)),
+    "ct": timezone(timedelta(hours=-6)),
+    "cst": timezone(timedelta(hours=-6)),
+    "cdt": timezone(timedelta(hours=-5)),
+    "mt": timezone(timedelta(hours=-7)),
+    "mst": timezone(timedelta(hours=-7)),
+    "mdt": timezone(timedelta(hours=-6)),
+    "pt": timezone(timedelta(hours=-8)),
+    "pst": timezone(timedelta(hours=-8)),
+    "pdt": timezone(timedelta(hours=-7)),
 }
 
 
@@ -66,6 +109,127 @@ def _extract_market_date(value: str) -> date | None:
 
 def _market_effective_date(record: dict) -> date | None:
     return _extract_market_date(record.get("market_slug") or "") or _extract_market_date(record.get("market_title") or "")
+
+
+def _end_of_day_utc(value: date) -> datetime:
+    return datetime(value.year, value.month, value.day, 23, 59, 59, tzinfo=timezone.utc)
+
+
+def _extract_market_expiry(value: str, now: datetime | None = None) -> datetime | None:
+    if not value:
+        return None
+
+    now = now or datetime.now(timezone.utc)
+    text = str(value).strip()
+
+    iso_datetime_match = re.search(r"(\d{4}-\d{2}-\d{2}[ t]\d{1,2}:\d{2}(?::\d{2})?(?:z|[+-]\d{2}:?\d{2})?)", text, re.IGNORECASE)
+    if iso_datetime_match:
+        parsed = _parse_iso(iso_datetime_match.group(1).upper().replace(" ", "T"))
+        if parsed:
+            return parsed
+
+    month_day_match = re.search(
+        r"\b("
+        r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|"
+        r"aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?"
+        r")\s+(\d{1,2})(?:,\s*(\d{4}))?"
+        r"(?:\s+(?:at\s+)?)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(utc|gmt|et|est|edt|ct|cst|cdt|mt|mst|mdt|pt|pst|pdt)?\b",
+        text,
+        re.IGNORECASE,
+    )
+    if month_day_match:
+        month = MONTH_NAME_TO_NUMBER[month_day_match.group(1).lower()]
+        day = int(month_day_match.group(2))
+        year = int(month_day_match.group(3) or now.year)
+        hour = int(month_day_match.group(4))
+        minute = int(month_day_match.group(5) or 0)
+        ampm = (month_day_match.group(6) or "").lower()
+        tz_name = (month_day_match.group(7) or "utc").lower()
+        if ampm == "pm" and hour < 12:
+            hour += 12
+        elif ampm == "am" and hour == 12:
+            hour = 0
+        try:
+            parsed = datetime(year, month, day, hour, minute, tzinfo=TIMEZONE_OFFSETS.get(tz_name, timezone.utc))
+        except ValueError:
+            return None
+        if not month_day_match.group(3) and parsed.astimezone(timezone.utc) < now - timedelta(days=180):
+            parsed = parsed.replace(year=parsed.year + 1)
+        return parsed.astimezone(timezone.utc)
+
+    month_date_match = re.search(
+        r"\b("
+        r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|"
+        r"aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?"
+        r")\s+(\d{1,2})(?:,\s*(\d{4}))?\b",
+        text,
+        re.IGNORECASE,
+    )
+    if month_date_match:
+        month = MONTH_NAME_TO_NUMBER[month_date_match.group(1).lower()]
+        day = int(month_date_match.group(2))
+        year = int(month_date_match.group(3) or now.year)
+        try:
+            parsed_date = date(year, month, day)
+        except ValueError:
+            return None
+        if not month_date_match.group(3) and parsed_date < now.date() - timedelta(days=180):
+            parsed_date = date(parsed_date.year + 1, parsed_date.month, parsed_date.day)
+        return _end_of_day_utc(parsed_date)
+
+    numeric_date_match = re.search(r"\b(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b", text)
+    if numeric_date_match:
+        month = int(numeric_date_match.group(1))
+        day = int(numeric_date_match.group(2))
+        year_text = numeric_date_match.group(3)
+        year = int(year_text) if year_text else now.year
+        if year_text and len(year_text) == 2:
+            year += 2000
+        try:
+            parsed_date = date(year, month, day)
+        except ValueError:
+            return None
+        if not year_text and parsed_date < now.date() - timedelta(days=180):
+            parsed_date = date(parsed_date.year + 1, parsed_date.month, parsed_date.day)
+        return _end_of_day_utc(parsed_date)
+
+    parsed_date = _extract_market_date(text)
+    if parsed_date:
+        return _end_of_day_utc(parsed_date)
+    return None
+
+
+def _trade_expiry_from_title(trade: dict, now: datetime | None = None) -> datetime | None:
+    now = now or datetime.now(timezone.utc)
+    payload = _record_payload(trade)
+    for candidate in (
+        trade.get("market_title"),
+        payload.get("market_title"),
+        payload.get("marketTitle"),
+        payload.get("title"),
+        trade.get("market_slug"),
+        payload.get("market_slug"),
+        payload.get("marketSlug"),
+        payload.get("slug"),
+    ):
+        expiry = _extract_market_expiry(str(candidate or ""), now=now)
+        if expiry:
+            return expiry
+    return None
+
+
+def _buy_expiry_guard_reason(trade: dict, now: datetime | None = None) -> str | None:
+    now = now or datetime.now(timezone.utc)
+    expiry = _trade_expiry_from_title(trade, now=now)
+    if not expiry:
+        return None
+    hours_until_expiry = (expiry - now).total_seconds() / 3600.0
+    if hours_until_expiry > MAX_BUY_EXPIRY_HOURS:
+        return (
+            f"Market expires too far out ({hours_until_expiry:.1f}h > {MAX_BUY_EXPIRY_HOURS}h) "
+            f"based on title-derived expiry {expiry.isoformat()}."
+        )
+    return None
 
 
 def _normalize_text(value: str) -> str:
@@ -1304,6 +1468,7 @@ class CopyTradingEngine:
         portfolio = database.portfolio_totals(self.db_path, source_positions)
         local_equity = max(float(portfolio["net_value"]), 0.0)
         cash_balance = float(portfolio["cash_balance"])
+        now = datetime.now(timezone.utc)
         correlation_strength = self._buy_correlation_strength(trade, source_positions) if side == "BUY" else 0.0
         single_bet_cash_pct = BASE_SINGLE_BET_CASH_PCT
         if side == "BUY":
@@ -1329,6 +1494,9 @@ class CopyTradingEngine:
             return CopyDecision("skip", "Sell copying disabled.")
 
         if side == "BUY":
+            expiry_guard_reason = _buy_expiry_guard_reason(trade, now=now)
+            if expiry_guard_reason:
+                return CopyDecision("skip", expiry_guard_reason)
             if buying_capacity < MIN_BET_USD:
                 return CopyDecision("skip", "No remaining buying capacity.")
             duplicate_reason = self._same_price_buy_guard(trade, settings)
