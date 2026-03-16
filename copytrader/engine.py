@@ -18,7 +18,7 @@ MIN_BET_USD = 0.05
 MIN_SETTLEMENT_USD = 0.01
 MEANINGFUL_MIN_BET_USD = 1.00
 MIN_CASH_RESERVE_PCT = 0.20
-MAX_SINGLE_BET_CASH_PCT = 0.20
+BASE_SINGLE_BET_CASH_PCT = 0.20
 MAX_TRADE_FETCH_LIMIT = 10
 SOURCE_POSITION_FETCH_LIMIT = 200
 BUY_REPLAY_GUARD_SECONDS = 15
@@ -28,6 +28,12 @@ RESOLVED_LOSS_PRICE_THRESHOLD = 0.001
 RESOLVED_SWEEP_MAX_POSITIONS = 120
 PORTFOLIO_GROWTH_STEP_PCT = 0.50
 PORTFOLIO_GROWTH_STABILITY_SECONDS = 15
+HIGH_CONVICTION_TRADE_USD = 1000.0
+TITLE_STOPWORDS = {
+    "vs", "will", "win", "on", "the", "and", "for", "set", "game", "games",
+    "totals", "total", "winner", "match", "team", "over", "under", "draw",
+    "ou", "yes", "no", "to",
+}
 
 
 def _clamp(value: float, lower: float, upper: float) -> float:
@@ -105,7 +111,14 @@ def _round_up_to_cent(value: float) -> float:
     return math.ceil(value * 100) / 100.0
 
 
-def _copy_trade_size(local_equity: float, source_amount_usd: float, leader_wallet_value: float, buying_capacity: float, cash_balance: float) -> float:
+def _copy_trade_size(
+    local_equity: float,
+    source_amount_usd: float,
+    leader_wallet_value: float,
+    buying_capacity: float,
+    cash_balance: float,
+    correlation_strength: float = 0.0,
+) -> float:
     local_equity = max(float(local_equity), 0.0)
     source_amount_usd = max(float(source_amount_usd), 0.0)
     leader_wallet_value = max(float(leader_wallet_value), 0.0)
@@ -117,21 +130,30 @@ def _copy_trade_size(local_equity: float, source_amount_usd: float, leader_walle
     if buying_capacity <= 0:
         return 0.0
 
-    single_bet_cap = _round_up_to_cent(cash_balance * MAX_SINGLE_BET_CASH_PCT)
-    effective_capacity = min(buying_capacity, single_bet_cap)
-    if effective_capacity <= 0:
-        return 0.0
-
     if source_amount_usd <= 0 or leader_wallet_value <= 0:
-        return effective_capacity
+        return buying_capacity
 
     aggression_fraction = _clamp(source_amount_usd / leader_wallet_value, 0.0, 1.0)
-    scaled_amount = _round_up_to_cent(local_equity * aggression_fraction)
+    amplified_fraction = aggression_fraction**0.65 if aggression_fraction > 0 else 0.0
+    scaled_amount = _round_up_to_cent(local_equity * amplified_fraction)
+    source_signal_strength = _clamp(source_amount_usd / HIGH_CONVICTION_TRADE_USD, 0.0, 1.0)
+    conviction_floor_fraction = max(source_signal_strength * 0.35, correlation_strength * 0.55)
+    conviction_floor = _round_up_to_cent(buying_capacity * conviction_floor_fraction)
     if scaled_amount >= MEANINGFUL_MIN_BET_USD:
-        return min(scaled_amount, effective_capacity)
+        return min(max(scaled_amount, conviction_floor), buying_capacity)
 
-    # If proportional sizing would collapse into dust, deploy available cash instead.
-    return effective_capacity
+    if source_signal_strength >= 0.5 or correlation_strength >= 0.5:
+        return buying_capacity
+    return min(max(conviction_floor, 0.0), buying_capacity)
+
+
+def _title_tokens(value: str) -> set[str]:
+    tokens = set()
+    for token in re.split(r"[^a-z0-9]+", (value or "").strip().lower()):
+        if len(token) < 3 or token in TITLE_STOPWORDS or token.isdigit():
+            continue
+        tokens.add(token)
+    return tokens
 
 
 @dataclass
@@ -1286,8 +1308,26 @@ class CopyTradingEngine:
         portfolio = database.portfolio_totals(self.db_path, source_positions)
         local_equity = max(float(portfolio["net_value"]), 0.0)
         cash_balance = float(portfolio["cash_balance"])
-        buying_capacity = float(portfolio["cash_balance"])
-        requested_amount = _copy_trade_size(local_equity, trade.get("amount_usd") or 0.0, leader_wallet_value, buying_capacity, cash_balance)
+        correlation_strength = self._buy_correlation_strength(trade, source_positions) if side == "BUY" else 0.0
+        single_bet_cash_pct = BASE_SINGLE_BET_CASH_PCT
+        if side == "BUY":
+            if correlation_strength >= 1.0:
+                single_bet_cash_pct = 1.0
+            elif correlation_strength >= 0.8:
+                single_bet_cash_pct = 0.85
+            elif correlation_strength >= 0.45:
+                single_bet_cash_pct = 0.65
+            elif float(trade.get("amount_usd") or 0.0) >= HIGH_CONVICTION_TRADE_USD:
+                single_bet_cash_pct = 0.60
+        buying_capacity = min(float(portfolio["cash_balance"]), _round_up_to_cent(cash_balance * single_bet_cash_pct))
+        requested_amount = _copy_trade_size(
+            local_equity,
+            trade.get("amount_usd") or 0.0,
+            leader_wallet_value,
+            buying_capacity,
+            cash_balance,
+            correlation_strength=correlation_strength,
+        )
 
         if side == "SELL" and not int(settings["copy_sells"]):
             return CopyDecision("skip", "Sell copying disabled.")
@@ -1658,6 +1698,46 @@ class CopyTradingEngine:
             trade,
             database.list_local_positions_marked(self.db_path, source_positions=source_positions),
         )
+
+    def _buy_correlation_strength(self, trade: dict, source_positions: list[dict]) -> float:
+        open_positions = [
+            row
+            for row in database.list_local_positions_marked(self.db_path, source_positions=source_positions)
+            if float(row.get("shares") or 0.0) > 0
+        ]
+        if not open_positions:
+            return 0.0
+        same_position = next(
+            (
+                row for row in open_positions
+                if (row.get("market_slug") or "") == (trade.get("market_slug") or "")
+                and (row.get("outcome") or "") == (trade.get("outcome") or "")
+            ),
+            None,
+        )
+        if same_position:
+            return 1.0
+        same_market = next(
+            (row for row in open_positions if (row.get("market_slug") or "") == (trade.get("market_slug") or "")),
+            None,
+        )
+        if same_market:
+            return 0.8
+
+        trade_tokens = _title_tokens(trade.get("market_title") or trade.get("market_slug") or "")
+        if not trade_tokens:
+            return 0.0
+        best_overlap = 0
+        for row in open_positions:
+            overlap = len(trade_tokens.intersection(_title_tokens(row.get("market_title") or row.get("market_slug") or "")))
+            best_overlap = max(best_overlap, overlap)
+        if best_overlap >= 4:
+            return 0.7
+        if best_overlap >= 3:
+            return 0.6
+        if best_overlap >= 2:
+            return 0.45
+        return 0.0
 
     def _same_price_buy_guard(self, trade: dict, settings: dict) -> str | None:
         position_key = f"{trade['market_slug']}:{trade['outcome']}"
