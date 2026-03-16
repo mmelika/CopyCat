@@ -11,7 +11,7 @@ from dash import Input, Output, State, callback_context, dcc, html, no_update
 
 from copytrader import database
 from copytrader.config import DB_PATH
-from copytrader.engine import CopyTradingEngine
+from copytrader.engine import CopyTradingEngine, PORTFOLIO_GROWTH_STEP_PCT, PORTFOLIO_GROWTH_STABILITY_SECONDS
 from copytrader.polymarket import PolymarketClient
 
 
@@ -66,6 +66,31 @@ def fmt_pacific_clock() -> str:
 def fmt_pacific_day(value: str) -> str:
     dt = to_pacific(value)
     return dt.strftime("%Y-%m-%d") if dt else (value or "-")
+
+
+def fmt_pacific_short(value: str) -> str:
+    dt = to_pacific(value)
+    return dt.strftime("%b %d %I:%M %p PT") if dt else "Never"
+
+
+def milestone_liquidation_summary(settings: dict, app_state: dict, active_positions_value: float) -> tuple[str, str]:
+    starting_balance = round(float(settings.get("paper_starting_balance") or 0.0), 2)
+    stored_target = round(float(app_state.get("milestone_liquidation_target") or 0.0), 2)
+    next_target = stored_target if stored_target > 0 else round(starting_balance * (1 + PORTFOLIO_GROWTH_STEP_PCT), 2)
+    armed_at = parse_utc(app_state.get("milestone_liquidation_armed_at") or "")
+    last_triggered_at = app_state.get("milestone_liquidation_last_triggered_at") or ""
+
+    if armed_at is not None:
+        armed_seconds = max(int((datetime.now(timezone.utc) - armed_at).total_seconds()), 0)
+        state_text = f"Armed for {armed_seconds}s, waiting for {PORTFOLIO_GROWTH_STABILITY_SECONDS}s stability"
+    else:
+        remaining = max(next_target - round(float(active_positions_value or 0.0), 2), 0.0)
+        state_text = f"{fmt_currency(remaining)} more active value needed to arm"
+
+    return (
+        fmt_currency(next_target),
+        f"Last: {fmt_pacific_short(last_triggered_at)} | {state_text}",
+    )
 
 
 def portfolio_range_start(end_time: datetime, range_key: str) -> datetime | None:
@@ -704,6 +729,7 @@ app.layout = html.Div(
                         stat_card("Execution Model", "stat-target", "stat-target-sub"),
                         stat_card("Pending Copies", "stat-pending", "stat-pending-sub"),
                         stat_card("Active Positions Value", "stat-copied-notional", "stat-copied-sub"),
+                        stat_card("+50% Liquidation", "stat-milestone", "stat-milestone-sub"),
                         stat_card("Net Liquidation Value", "stat-net-value", "stat-net-sub", "stat-net-chip"),
                     ],
                 ),
@@ -951,6 +977,8 @@ def refresh_portfolio_chart(_, range_key):
     Output("stat-pending-sub", "children"),
     Output("stat-copied-notional", "children"),
     Output("stat-copied-sub", "children"),
+    Output("stat-milestone", "children"),
+    Output("stat-milestone-sub", "children"),
     Output("stat-net-value", "children"),
     Output("stat-net-chip", "children"),
     Output("stat-net-chip", "className"),
@@ -1447,6 +1475,7 @@ def refresh_dashboard(_, trade_tab):
     refresh_text = f"Last sync: {fmt_pacific_time(app_state['last_sync_at']) if app_state['last_sync_at'] else 'never'}"
     net_gain = float(primary_portfolio["total_gain"])
     net_chip_text = f"{primary_portfolio['total_gain_pct']:+.2f}%"
+    milestone_value, milestone_subtext = milestone_liquidation_summary(settings, app_state, active_positions_value)
 
     return (
         heartbeat_label(app_state, runtime_status, stale_age_seconds),
@@ -1473,6 +1502,8 @@ def refresh_dashboard(_, trade_tab):
             if shadow_mode_active
             else f"{primary_portfolio['positions_count']} {primary_name} positions"
         ),
+        milestone_value,
+        milestone_subtext,
         fmt_currency(primary_portfolio["net_value"]),
         net_chip_text,
         f"stat-chip {signed_class(net_gain)}",
