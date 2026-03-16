@@ -838,7 +838,9 @@ class LiveBroker:
                 )
             signed_order = live_client.create_market_order(market_args)
             live_order_payload = live_client.post_order(signed_order, OrderType.FOK)
-            status = str((live_order_payload or {}).get("success") or "submitted").upper()
+            payload_success = bool((live_order_payload or {}).get("success"))
+            payload_status = str((live_order_payload or {}).get("status") or "").strip().upper()
+            status = "SUBMITTED" if payload_success else (payload_status or "SUBMITTED")
             failure_reason = ""
         except Exception as exc:
             status = "FAILED"
@@ -988,6 +990,8 @@ class CopyTradingEngine:
         failed = 0
         message = "Sync complete."
         try:
+            if self._execution_mode(settings) == "live":
+                self.live_broker.refresh_account_snapshot(settings, self.db_path)
             target = settings["target_wallet"] or settings["target_handle"]
             profile = self.client.resolve_target_wallet(target)
             previous_local_positions = database.get_local_positions(self.db_path)
@@ -1714,6 +1718,8 @@ class CopyTradingEngine:
     def _liquidate_positions_at_growth_milestone(self, settings: dict, source_positions: list[dict]) -> int:
         app_state = database.get_app_state(self.db_path)
         target_value = self._growth_milestone_target(settings, app_state)
+        portfolio = database.portfolio_totals(self.db_path, source_positions)
+        net_liquidation_value = round(float(portfolio.get("net_value") or 0.0), 2)
         positions = [
             row
             for row in database.list_local_positions_marked(
@@ -1723,8 +1729,7 @@ class CopyTradingEngine:
             )
             if float(row.get("shares") or 0.0) > 0 and float(row.get("market_value") or 0.0) >= MIN_SETTLEMENT_USD
         ]
-        active_positions_value = round(sum(float(row.get("market_value") or 0.0) for row in positions), 2)
-        if active_positions_value + 1e-9 < target_value or not positions:
+        if net_liquidation_value + 1e-9 < target_value or not positions:
             if app_state.get("milestone_liquidation_armed_at"):
                 database.set_app_state("milestone_liquidation_armed_at", "", self.db_path)
             return 0
@@ -1737,7 +1742,7 @@ class CopyTradingEngine:
                 "INFO",
                 "rebalance",
                 "Portfolio growth milestone armed.",
-                {"target_value": target_value, "active_positions_value": active_positions_value, "stability_seconds": PORTFOLIO_GROWTH_STABILITY_SECONDS},
+                {"target_value": target_value, "net_liquidation_value": net_liquidation_value, "stability_seconds": PORTFOLIO_GROWTH_STABILITY_SECONDS},
                 self.db_path,
             )
             return 0
@@ -1756,7 +1761,7 @@ class CopyTradingEngine:
                 side="SELL",
                 price=float(position["current_price"]),
                 requested_amount_usd=market_value,
-                reason=f"Auto-liquidated after holding {active_positions_value:.2f} above the {target_value:.2f} growth milestone.",
+                reason=f"Auto-liquidated after net liquidation value reached {net_liquidation_value:.2f} above the {target_value:.2f} growth milestone.",
                 settings=settings,
                 match_strategy="growth-milestone-liquidation",
             )
@@ -1774,7 +1779,7 @@ class CopyTradingEngine:
                 {
                     "positions_liquidated": liquidated,
                     "trigger_value": target_value,
-                    "active_positions_value": active_positions_value,
+                    "net_liquidation_value": net_liquidation_value,
                     "next_target_value": next_target,
                     "stability_seconds": PORTFOLIO_GROWTH_STABILITY_SECONDS,
                 },

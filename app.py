@@ -73,7 +73,7 @@ def fmt_pacific_short(value: str) -> str:
     return dt.strftime("%b %d %I:%M %p PT") if dt else "Never"
 
 
-def milestone_liquidation_summary(settings: dict, app_state: dict, active_positions_value: float) -> tuple[str, str]:
+def milestone_liquidation_summary(settings: dict, app_state: dict, net_liquidation_value: float) -> tuple[str, str]:
     starting_balance = round(float(settings.get("paper_starting_balance") or 0.0), 2)
     stored_target = round(float(app_state.get("milestone_liquidation_target") or 0.0), 2)
     next_target = stored_target if stored_target > 0 else round(starting_balance * (1 + PORTFOLIO_GROWTH_STEP_PCT), 2)
@@ -84,8 +84,8 @@ def milestone_liquidation_summary(settings: dict, app_state: dict, active_positi
         armed_seconds = max(int((datetime.now(timezone.utc) - armed_at).total_seconds()), 0)
         state_text = f"Armed for {armed_seconds}s, waiting for {PORTFOLIO_GROWTH_STABILITY_SECONDS}s stability"
     else:
-        remaining = max(next_target - round(float(active_positions_value or 0.0), 2), 0.0)
-        state_text = f"{fmt_currency(remaining)} more active value needed to arm"
+        remaining = max(next_target - round(float(net_liquidation_value or 0.0), 2), 0.0)
+        state_text = f"{fmt_currency(remaining)} more net value needed to arm"
 
     return (
         fmt_currency(next_target),
@@ -1060,6 +1060,7 @@ def refresh_dashboard(_, trade_tab):
     )
     daily_realized_map = {row["date"]: row["realized_pnl"] for row in primary_analytics["daily_realized"]}
     active_positions_value = float(primary_portfolio["gross_exposure"])
+    net_liquidation_value = float(primary_portfolio["net_value"])
     copied_trade_rows = [
         [
             fmt_pacific_time(row["created_at"]),
@@ -1482,7 +1483,7 @@ def refresh_dashboard(_, trade_tab):
     refresh_text = f"Last sync: {fmt_pacific_time(app_state['last_sync_at']) if app_state['last_sync_at'] else 'never'}"
     net_gain = float(primary_portfolio["total_gain"])
     net_chip_text = f"{primary_portfolio['total_gain_pct']:+.2f}%"
-    milestone_value, milestone_subtext = milestone_liquidation_summary(settings, app_state, active_positions_value)
+    milestone_value, milestone_subtext = milestone_liquidation_summary(settings, app_state, net_liquidation_value)
 
     return (
         heartbeat_label(app_state, runtime_status, stale_age_seconds),
@@ -1503,7 +1504,7 @@ def refresh_dashboard(_, trade_tab):
         execution_card_sub,
         str(len(pending)),
         f"{len(shadow_orders)} recent shadow fills" if shadow_mode_active else f"{len(copy_orders)} total copied orders",
-        fmt_currency(active_positions_value),
+        fmt_currency(net_liquidation_value),
         (
             f"{primary_portfolio['positions_count']} {primary_name} positions | {len(shadow_analytics['open_positions'])} shadow-marked"
             if shadow_mode_active

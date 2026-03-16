@@ -24,7 +24,7 @@ If you are searching GitHub for a `Polymarket trading bot`, `Polymarket copy bot
 - `Burst-trade collapsing`: rapid fills in the same market are merged before copy logic runs.
 - `Bootstrap sync`: the bot can seed local shadow inventory from the leader's current open positions on first run.
 - `Resolved-market cleanup`: resolved losers can be swept to zero and nearly fully priced winners can auto-exit above 98c.
-- `Growth milestone liquidation`: the shadow portfolio can fully liquidate after holding above each +50% portfolio milestone for a stability window.
+- `Growth milestone liquidation`: the shadow portfolio can fully liquidate after net liquidation value holds above each +50% portfolio milestone for a stability window.
 - `Manual controls`: pause, force sync, fresh start, liquidate-all, and per-position sell buttons are available from the dashboard.
 - `Audit tooling`: `/healthz`, `/audit/profit`, `/audit/shadow`, `/audit/shadow/closed`, and `/audit/reconcile` help verify the bot's state.
 - `Live execution scaffold`: there is a guarded Polymarket CLOB order-intent path and live account reconciliation, but this should be treated as non-production.
