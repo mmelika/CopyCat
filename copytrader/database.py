@@ -299,6 +299,12 @@ def _coerce_setting(key: str, value: str):
     return value
 
 
+def _normalized_setting_value(key: str, value):
+    if key in {"paper_starting_balance", "paper_cash_balance"}:
+        return round(max(float(value or 0.0), 0.0), 2)
+    return value
+
+
 def get_settings(db_path: Path | str = DB_PATH) -> dict:
     with connect(db_path) as conn:
         rows = conn.execute("SELECT key, value FROM settings").fetchall()
@@ -309,13 +315,14 @@ def update_settings(values: dict, db_path: Path | str = DB_PATH) -> None:
     now = utc_now()
     with connect(db_path) as conn:
         for key, value in values.items():
+            normalized_value = _normalized_setting_value(key, value)
             conn.execute(
                 """
                 INSERT INTO settings(key, value, updated_at)
                 VALUES (?, ?, ?)
                 ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
                 """,
-                (key, str(value), now),
+                (key, str(normalized_value), now),
             )
 
 
@@ -1038,12 +1045,7 @@ def shadow_portfolio_totals(db_path: Path | str = DB_PATH, source_positions: lis
     positions = analytics["open_positions"]
     gross_exposure = round(sum(float(row["market_value"]) for row in positions), 2)
     starting_balance = float(settings["paper_starting_balance"])
-    total_buy_notional = round(
-        sum(float(order.get("requested_amount_usd") or 0.0) for order in list_all_shadow_orders(db_path) if order.get("side") == "BUY"),
-        2,
-    )
-    total_sell_proceeds = round(sum(float(row.get("proceeds") or 0.0) for row in analytics["closed_trades"]), 2)
-    cash_balance = round(starting_balance - total_buy_notional + total_sell_proceeds, 2)
+    cash_balance = round(max(float(settings.get("paper_cash_balance") or 0.0), 0.0), 2)
     realized_pnl = round(sum(float(row.get("pnl") or 0.0) for row in analytics["closed_trades"]), 2)
     net_value = round(cash_balance + gross_exposure, 2)
     total_gain = round(net_value - starting_balance, 2)

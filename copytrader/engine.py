@@ -338,7 +338,15 @@ class PaperBroker:
         slippage = float(settings["slippage_bps"]) / 10000.0
         executed_price = source_price * (1 + slippage) if side == "BUY" else source_price * (1 - slippage)
         executed_price = _clamp(executed_price, 0.01, 0.99)
+        position_key = source_trade.get("position_key") or f"{source_trade.get('market_slug')}:{source_trade.get('outcome')}"
         shares = round(requested_amount_usd / executed_price, 6)
+        actual_amount_usd = round(requested_amount_usd, 2)
+        if side == "SELL":
+            position = database.get_local_position(position_key, db_path)
+            if not position or float(position.get("shares") or 0.0) <= 0:
+                raise RuntimeError("No local position available to sell")
+            shares = round(min(float(position.get("shares") or 0.0), shares), 6)
+            actual_amount_usd = round(shares * executed_price, 2)
         order = {
             "order_id": str(uuid.uuid4()),
             "source_trade_id": source_trade["source_trade_id"],
@@ -346,7 +354,7 @@ class PaperBroker:
             "market_title": source_trade.get("market_title"),
             "outcome": source_trade["outcome"],
             "side": side,
-            "requested_amount_usd": round(requested_amount_usd, 2),
+            "requested_amount_usd": actual_amount_usd,
             "executed_price": round(executed_price, 4),
             "shares": shares,
             "status": "FILLED",
@@ -374,16 +382,24 @@ class PaperBroker:
         requested_amount_usd = round(float(requested_amount_usd or 0.0), 2)
         source_price = max(float(price or 0.0), 0.0)
         slippage = float(settings["slippage_bps"]) / 10000.0
+        position_key = f"{market_slug}:{outcome}"
         if side == "SELL" and requested_amount_usd <= 0 and source_price <= 0:
             executed_price = 0.0
-            position_key = f"{market_slug}:{outcome}"
             position = database.get_local_position(position_key, db_path)
             shares = round(float(position["shares"]) if position else 0.0, 6)
+            actual_amount_usd = 0.0
         else:
             source_price = max(source_price, 0.01)
             executed_price = source_price * (1 + slippage) if side == "BUY" else source_price * (1 - slippage)
             executed_price = _clamp(executed_price, 0.01, 0.99)
             shares = round(requested_amount_usd / executed_price, 6)
+            actual_amount_usd = requested_amount_usd
+            if side == "SELL":
+                position = database.get_local_position(position_key, db_path)
+                if not position or float(position.get("shares") or 0.0) <= 0:
+                    raise RuntimeError("No local position available to sell")
+                shares = round(min(float(position.get("shares") or 0.0), shares), 6)
+                actual_amount_usd = round(shares * executed_price, 2)
         order = {
             "order_id": str(uuid.uuid4()),
             "source_trade_id": None,
@@ -391,7 +407,7 @@ class PaperBroker:
             "market_title": market_title,
             "outcome": outcome,
             "side": side,
-            "requested_amount_usd": requested_amount_usd,
+            "requested_amount_usd": actual_amount_usd,
             "executed_price": round(executed_price, 4),
             "shares": shares,
             "status": "FILLED",
@@ -525,10 +541,16 @@ class ShadowBroker:
         live_price = round(_clamp(live_price, 0.01, 0.99), 4)
         estimated_live_shares = round(requested_amount_usd / live_price, 6) if live_price > 0 else 0.0
         liquidation_position = None
-        if side == "SELL" and not source_trade.get("source_trade_id"):
+        if side == "SELL":
             liquidation_position = self._shadow_position(source_trade, db_path)
             if liquidation_position and float(liquidation_position.get("shares") or 0.0) > 0:
-                estimated_live_shares = round(float(liquidation_position.get("shares") or 0.0), 6)
+                estimated_live_shares = round(
+                    min(
+                        float(liquidation_position.get("shares") or 0.0),
+                        estimated_live_shares if estimated_live_shares > 0 else float(liquidation_position.get("shares") or 0.0),
+                    ),
+                    6,
+                )
                 if float(source_trade.get("price") or 0.0) <= RESOLVED_LOSS_PRICE_THRESHOLD:
                     paper_price = 0.0
                     live_price = 0.0

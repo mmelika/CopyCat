@@ -154,8 +154,8 @@ def heartbeat_label(app_state: dict, runtime_status: str, stale_age_seconds: int
 def healthz():
     settings = database.get_settings(DB_PATH)
     app_state = database.get_app_state(DB_PATH)
-    live_positions = database.fetch_live_source_positions(DB_PATH)
-    portfolio = database.portfolio_totals(DB_PATH, live_positions)
+    cached_positions = database.list_source_positions(200, DB_PATH)
+    portfolio = database.portfolio_totals(DB_PATH, cached_positions)
     runtime_status, _, stale_age_seconds = engine_runtime_status(app_state, settings)
     return jsonify(
         {
@@ -778,12 +778,7 @@ def shadow_portfolio_totals_from_analytics(settings: dict, analytics: dict, shad
     positions = analytics["open_positions"]
     gross_exposure = round(sum(float(row.get("market_value") or 0.0) for row in positions), 2)
     starting_balance = float(settings["paper_starting_balance"])
-    total_buy_notional = round(
-        sum(float(order.get("requested_amount_usd") or 0.0) for order in shadow_orders if order.get("side") == "BUY"),
-        2,
-    )
-    total_sell_proceeds = round(sum(float(row.get("proceeds") or 0.0) for row in analytics["closed_trades"]), 2)
-    cash_balance = round(starting_balance - total_buy_notional + total_sell_proceeds, 2)
+    cash_balance = round(max(float(settings.get("paper_cash_balance") or 0.0), 0.0), 2)
     realized_pnl = round(sum(float(row.get("pnl") or 0.0) for row in analytics["closed_trades"]), 2)
     net_value = round(cash_balance + gross_exposure, 2)
     total_gain = round(net_value - starting_balance, 2)
@@ -989,7 +984,7 @@ def refresh_dashboard(_, trade_tab):
     execution_mode = (settings.get("execution_mode") or "shadow").strip().lower()
     shadow_mode_active = execution_mode == "shadow"
     runtime_status, runtime_class, stale_age_seconds = engine_runtime_status(app_state, settings)
-    live_positions = database.fetch_live_source_positions(DB_PATH)
+    live_positions = database.list_source_positions(200, DB_PATH)
     source_trades = database.list_source_trades(18, DB_PATH)
     copy_orders = database.list_copy_orders(12, DB_PATH)
     sell_match_rows = database.list_sell_match_audit(12, DB_PATH)
