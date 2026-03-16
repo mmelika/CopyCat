@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 import dash
 import plotly.graph_objects as go
 from flask import jsonify
-from dash import Input, Output, State, callback_context, dcc, html, no_update
+from dash import ALL, Input, Output, State, callback_context, dcc, html, no_update
 
 from copytrader import database
 from copytrader.config import DB_PATH
@@ -761,6 +761,7 @@ app.layout = html.Div(
             ],
         ),
         settings_modal(),
+        html.Div(id="position-sell-action", className="hidden"),
     ]
 )
 
@@ -1103,9 +1104,15 @@ def refresh_dashboard(_, trade_tab):
             fmt_number(row["current_price"], 3),
             fmt_currency(row["market_value"]),
             fmt_signed_currency(row["unrealized_pnl"]),
+            html.Button(
+                "Sell",
+                id={"type": "sell-position-btn", "position_key": row["position_key"]},
+                className="btn-danger position-sell-btn",
+                n_clicks=0,
+            ),
         ]
         for row in primary_analytics["open_trades"][:40]
-    ] or [["No open trades", "-", "-", "-", "-", "-", "-", "-", "-"]]
+    ] or [["No open trades", "-", "-", "-", "-", "-", "-", "-", "-", "-"]]
     closed_trade_rows = [
         [
             fmt_pacific_time(row["entry_time"]),
@@ -1122,7 +1129,7 @@ def refresh_dashboard(_, trade_tab):
         for row in primary_analytics["closed_trades"][:40]
     ] or [["No closed trades", "-", "-", "-", "-", "-", "-", "-", "-", "-"]]
     trade_book_table = (
-        render_table(["Bought At (PT)", "Market", "Outcome", "Shares", "Buy Px", "Cost", "Mark Px", "Value", "P/L"], open_trade_rows)
+        render_table(["Bought At (PT)", "Market", "Outcome", "Shares", "Buy Px", "Cost", "Mark Px", "Value", "P/L", "Sell"], open_trade_rows)
         if trade_tab == "open-trades"
         else render_table(["Bought At (PT)", "Sold At (PT)", "Market", "Outcome", "Shares", "Buy Px", "Sell Px", "Cost", "Proceeds", "P/L"], closed_trade_rows)
     )
@@ -1715,6 +1722,23 @@ def fresh_start(_):
 def liquidate_all(_):
     CopyTradingEngine(DB_PATH).liquidate_all()
     return 0
+
+
+@app.callback(
+    Output("position-sell-action", "children"),
+    Input({"type": "sell-position-btn", "position_key": ALL}, "n_clicks"),
+    State({"type": "sell-position-btn", "position_key": ALL}, "id"),
+    prevent_initial_call=True,
+)
+def sell_single_position(_clicks, ids):
+    triggered = callback_context.triggered_id
+    if not isinstance(triggered, dict):
+        return no_update
+    position_key = (triggered.get("position_key") or "").strip()
+    if not position_key:
+        return no_update
+    CopyTradingEngine(DB_PATH).liquidate_position(position_key)
+    return f"{position_key}:{datetime.now(timezone.utc).isoformat()}"
 
 
 if __name__ == "__main__":

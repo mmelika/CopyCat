@@ -1435,6 +1435,89 @@ class CopyTradingEngine:
             database.log("INFO", "rebalance", "Liquidate All requested from dashboard.", {"execution_mode": mode, "positions_liquidated": liquidated}, self.db_path)
             return liquidated
 
+    def liquidate_position(self, position_key: str) -> bool:
+        with self._lock:
+            clean_key = (position_key or "").strip()
+            if not clean_key:
+                return False
+
+            settings = database.get_settings(self.db_path)
+            mode = self._execution_mode(settings)
+            market_slug, _, outcome = clean_key.partition(":")
+            if not market_slug or not outcome:
+                return False
+
+            if mode == "live":
+                snapshot = self.live_broker.refresh_account_snapshot(settings, self.db_path)
+                position = next(
+                    (
+                        row
+                        for row in snapshot.get("positions") or []
+                        if (row.get("market_slug") or "") == market_slug and (row.get("outcome") or "") == outcome
+                    ),
+                    None,
+                )
+                if not position or float(position.get("shares") or 0.0) <= 0:
+                    return False
+                requested_amount_usd = round(float(position.get("notional_usd") or 0.0), 2)
+                self.live_broker.execute_manual(
+                    market_slug=market_slug,
+                    market_title=position.get("market_title"),
+                    outcome=outcome,
+                    side="SELL",
+                    price=float(position.get("price") or 0.0),
+                    requested_amount_usd=requested_amount_usd,
+                    reason="Dashboard position sell",
+                    settings=settings,
+                    db_path=self.db_path,
+                )
+                database.log(
+                    "INFO",
+                    "rebalance",
+                    "Single-position sell requested from dashboard.",
+                    {"execution_mode": mode, "position_key": clean_key},
+                    self.db_path,
+                )
+                return True
+
+            source_positions = database.fetch_live_source_positions(self.db_path)
+            position = next(
+                (
+                    row
+                    for row in database.list_local_positions_marked(self.db_path, source_positions=source_positions)
+                    if (row.get("position_key") or "") == clean_key and float(row.get("shares") or 0.0) > 0
+                ),
+                None,
+            )
+            if not position:
+                return False
+
+            current_price = float(position.get("current_price") or 0.0)
+            requested_amount_usd = (
+                round(float(position.get("market_value") or 0.0), 2)
+                if current_price > RESOLVED_LOSS_PRICE_THRESHOLD
+                else 0.0
+            )
+            self._execute_manual_trade(
+                market_slug=market_slug,
+                market_title=position.get("market_title"),
+                outcome=outcome,
+                side="SELL",
+                price=current_price,
+                requested_amount_usd=requested_amount_usd,
+                reason="Dashboard single-position sell",
+                settings=settings,
+                match_strategy="manual-single-position-liquidation",
+            )
+            database.log(
+                "INFO",
+                "rebalance",
+                "Single-position sell requested from dashboard.",
+                {"execution_mode": mode, "position_key": clean_key},
+                self.db_path,
+            )
+            return True
+
     def _copy_trades_first(self, trades: list[dict], settings: dict, leader_wallet_value: float, source_positions: list[dict]) -> tuple[int, int]:
         copied = 0
         failed = 0
