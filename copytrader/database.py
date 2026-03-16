@@ -1738,6 +1738,9 @@ def reset_runtime_state(
     set_app_state("leader_wallet_value", "0", db_path)
     set_app_state("leader_wallet_updated_at", "", db_path)
     set_app_state("bootstrap_positions_done_at", "", db_path)
+    set_app_state("milestone_liquidation_target", "", db_path)
+    set_app_state("milestone_liquidation_armed_at", "", db_path)
+    set_app_state("milestone_liquidation_last_triggered_at", "", db_path)
     snapshot_portfolio(starting_balance, 0.0, starting_balance, 0, db_path)
     snapshot_shadow_portfolio(starting_balance, 0.0, starting_balance, 0, db_path)
     log(

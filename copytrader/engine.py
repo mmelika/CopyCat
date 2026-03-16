@@ -22,10 +22,11 @@ MAX_TRADE_FETCH_LIMIT = 10
 SOURCE_POSITION_FETCH_LIMIT = 200
 BUY_REPLAY_GUARD_SECONDS = 15
 FRESH_FILL_MARK_GRACE_SECONDS = 5
-AUTO_PROFIT_TAKE_THRESHOLD = 0.70
 FULLY_PRICED_EXIT_THRESHOLD = 0.98
 RESOLVED_LOSS_PRICE_THRESHOLD = 0.001
 RESOLVED_SWEEP_MAX_POSITIONS = 120
+PORTFOLIO_GROWTH_STEP_PCT = 0.50
+PORTFOLIO_GROWTH_STABILITY_SECONDS = 15
 
 
 def _clamp(value: float, lower: float, upper: float) -> float:
@@ -652,9 +653,9 @@ class CopyTradingEngine:
             copied += auto_zero_value_exits
             if auto_zero_value_exits:
                 database.refresh_local_position_market_values(self.db_path, source_positions=positions)
-            auto_profit_takes = self._liquidate_positions_at_profit_target(settings, positions)
-            copied += auto_profit_takes
-            if auto_profit_takes:
+            milestone_liquidations = self._liquidate_positions_at_growth_milestone(settings, positions)
+            copied += milestone_liquidations
+            if milestone_liquidations:
                 database.refresh_local_position_market_values(self.db_path, source_positions=positions)
             auto_liquidated = self._liquidate_fully_priced_positions(settings, positions)
             copied += auto_liquidated
@@ -1128,7 +1129,18 @@ class CopyTradingEngine:
             match_strategy=match_strategy,
         )
 
-    def _liquidate_positions_at_profit_target(self, settings: dict, source_positions: list[dict]) -> int:
+    def _growth_milestone_target(self, settings: dict, app_state: dict) -> float:
+        stored_target = round(float(app_state.get("milestone_liquidation_target") or 0.0), 2)
+        if stored_target >= MIN_SETTLEMENT_USD:
+            return stored_target
+        starting_balance = round(float(settings.get("paper_starting_balance") or 0.0), 2)
+        initial_target = round(starting_balance * (1 + PORTFOLIO_GROWTH_STEP_PCT), 2)
+        database.set_app_state("milestone_liquidation_target", f"{initial_target:.2f}", self.db_path)
+        return initial_target
+
+    def _liquidate_positions_at_growth_milestone(self, settings: dict, source_positions: list[dict]) -> int:
+        app_state = database.get_app_state(self.db_path)
+        target_value = self._growth_milestone_target(settings, app_state)
         positions = [
             row
             for row in database.list_local_positions_marked(
@@ -1136,18 +1148,33 @@ class CopyTradingEngine:
                 freeze_recent_seconds=FRESH_FILL_MARK_GRACE_SECONDS,
                 source_positions=source_positions,
             )
-            if float(row.get("shares") or 0.0) > 0
-            and float(row.get("market_value") or 0.0) >= MIN_BET_USD
-            and float(row.get("cost_basis") or 0.0) > 0
-            and float(row.get("unrealized_pnl") or 0.0) / float(row.get("cost_basis") or 1.0) >= AUTO_PROFIT_TAKE_THRESHOLD
+            if float(row.get("shares") or 0.0) > 0 and float(row.get("market_value") or 0.0) >= MIN_SETTLEMENT_USD
         ]
-        if not positions:
+        active_positions_value = round(sum(float(row.get("market_value") or 0.0) for row in positions), 2)
+        if active_positions_value + 1e-9 < target_value or not positions:
+            if app_state.get("milestone_liquidation_armed_at"):
+                database.set_app_state("milestone_liquidation_armed_at", "", self.db_path)
+            return 0
+
+        armed_at = _parse_iso(app_state.get("milestone_liquidation_armed_at") or "")
+        now = _parse_iso(database.utc_now()) or datetime.now(timezone.utc)
+        if armed_at is None:
+            database.set_app_state("milestone_liquidation_armed_at", now.replace(microsecond=0).isoformat(), self.db_path)
+            database.log(
+                "INFO",
+                "rebalance",
+                "Portfolio growth milestone armed.",
+                {"target_value": target_value, "active_positions_value": active_positions_value, "stability_seconds": PORTFOLIO_GROWTH_STABILITY_SECONDS},
+                self.db_path,
+            )
+            return 0
+        if (now - armed_at).total_seconds() < PORTFOLIO_GROWTH_STABILITY_SECONDS:
             return 0
 
         liquidated = 0
         for position in positions:
             market_value = round(float(position.get("market_value") or 0.0), 2)
-            if market_value < MIN_BET_USD:
+            if market_value < MIN_SETTLEMENT_USD:
                 continue
             self._execute_manual_trade(
                 market_slug=position["market_slug"],
@@ -1156,18 +1183,28 @@ class CopyTradingEngine:
                 side="SELL",
                 price=float(position["current_price"]),
                 requested_amount_usd=market_value,
-                reason=f"Auto-sold after reaching {int(AUTO_PROFIT_TAKE_THRESHOLD * 100)}% profit.",
+                reason=f"Auto-liquidated after holding {active_positions_value:.2f} above the {target_value:.2f} growth milestone.",
                 settings=settings,
-                match_strategy="auto-profit-take",
+                match_strategy="growth-milestone-liquidation",
             )
             liquidated += 1
 
         if liquidated:
+            next_target = round(target_value * (1 + PORTFOLIO_GROWTH_STEP_PCT), 2)
+            database.set_app_state("milestone_liquidation_target", f"{next_target:.2f}", self.db_path)
+            database.set_app_state("milestone_liquidation_armed_at", "", self.db_path)
+            database.set_app_state("milestone_liquidation_last_triggered_at", now.replace(microsecond=0).isoformat(), self.db_path)
             database.log(
                 "INFO",
                 "rebalance",
-                "Auto-sold shadow positions after hitting the profit target.",
-                {"positions_liquidated": liquidated, "profit_target_pct": AUTO_PROFIT_TAKE_THRESHOLD},
+                "Fully liquidated positions at the portfolio growth milestone.",
+                {
+                    "positions_liquidated": liquidated,
+                    "trigger_value": target_value,
+                    "active_positions_value": active_positions_value,
+                    "next_target_value": next_target,
+                    "stability_seconds": PORTFOLIO_GROWTH_STABILITY_SECONDS,
+                },
                 self.db_path,
             )
         return liquidated
