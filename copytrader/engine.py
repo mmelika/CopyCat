@@ -30,6 +30,10 @@ PORTFOLIO_GROWTH_STEP_PCT = 0.50
 PORTFOLIO_GROWTH_STABILITY_SECONDS = 15
 HIGH_CONVICTION_TRADE_USD = 1000.0
 MAX_BUY_EXPIRY_HOURS = 24
+POSITION_CAP_ACTIVATION_EQUITY_USD = 250.0
+POSITION_CAP_BASE_USD = 75.0
+POSITION_CAP_STEP_EQUITY_USD = 100.0
+POSITION_CAP_STEP_USD = 25.0
 TITLE_STOPWORDS = {
     "vs", "will", "win", "on", "the", "and", "for", "set", "game", "games",
     "totals", "total", "winner", "match", "team", "over", "under", "draw",
@@ -309,6 +313,43 @@ def _copy_trade_size(
     if source_signal_strength >= 0.5 or correlation_strength >= 0.5:
         return buying_capacity
     return min(max(conviction_floor, 0.0), buying_capacity)
+
+
+def _position_value_cap(local_equity: float) -> float | None:
+    equity = max(float(local_equity), 0.0)
+    if equity <= POSITION_CAP_ACTIVATION_EQUITY_USD:
+        return None
+    increments = math.floor((equity - POSITION_CAP_ACTIVATION_EQUITY_USD) / POSITION_CAP_STEP_EQUITY_USD)
+    return round(POSITION_CAP_BASE_USD + (max(increments, 0) * POSITION_CAP_STEP_USD), 2)
+
+
+def _current_position_value(
+    position_key: str,
+    source_positions: list[dict],
+    *,
+    fallback_price: float = 0.0,
+    db_path=DB_PATH,
+) -> float:
+    position = database.get_local_position(position_key, db_path)
+    if not position:
+        return 0.0
+
+    shares = float(position.get("shares") or 0.0)
+    stored_value = round(float(position.get("notional_usd") or 0.0), 2)
+    if shares <= 0:
+        return max(stored_value, 0.0)
+
+    market_slug, _, outcome = position_key.partition(":")
+    current_price = 0.0
+    for row in source_positions or []:
+        if (row.get("market_slug") or "") == market_slug and (row.get("outcome") or "") == outcome:
+            current_price = float(row.get("price") or 0.0)
+            break
+
+    if current_price <= 0:
+        current_price = max(float(position.get("avg_price") or 0.0), float(fallback_price or 0.0))
+    live_value = round(shares * current_price, 2) if current_price > 0 else 0.0
+    return max(stored_value, live_value, 0.0)
 
 
 def _title_tokens(value: str) -> set[str]:
@@ -1536,6 +1577,25 @@ class CopyTradingEngine:
             duplicate_reason = self._same_price_buy_guard(trade, settings)
             if duplicate_reason:
                 return CopyDecision("skip", duplicate_reason)
+            position_key = trade.get("position_key") or f"{trade.get('market_slug')}:{trade.get('outcome')}"
+            position_value_cap = _position_value_cap(local_equity)
+            if position_value_cap is not None:
+                current_position_value = _current_position_value(
+                    position_key,
+                    source_positions,
+                    fallback_price=float(trade.get("price") or 0.0),
+                    db_path=self.db_path,
+                )
+                remaining_position_capacity = round(position_value_cap - current_position_value, 2)
+                if remaining_position_capacity < MIN_BET_USD:
+                    return CopyDecision(
+                        "skip",
+                        (
+                            f"Position cap reached for {position_key} "
+                            f"(${position_value_cap:.2f} max at current equity)."
+                        ),
+                    )
+                requested_amount = min(requested_amount, remaining_position_capacity)
             requested_amount = max(requested_amount, MIN_BET_USD)
             requested_amount = min(requested_amount, buying_capacity)
             requested_amount = _round_up_to_cent(requested_amount) if requested_amount > 0 else 0.0
@@ -1761,6 +1821,7 @@ class CopyTradingEngine:
 
         copied = 0
         bootstrap_time = app_state.get("copy_start_at") or database.utc_now()
+        position_value_cap = _position_value_cap(float(portfolio["net_value"]))
         ordered_positions = sorted(positions, key=lambda row: float(row.get("notional_usd") or 0.0), reverse=True)
         for position in ordered_positions:
             if buying_capacity < MIN_BET_USD:
@@ -1769,6 +1830,8 @@ class CopyTradingEngine:
             if weight <= 0:
                 continue
             requested_amount = _round_up_to_cent(float(portfolio["net_value"]) * weight)
+            if position_value_cap is not None:
+                requested_amount = min(requested_amount, position_value_cap)
             requested_amount = min(requested_amount, buying_capacity)
             if requested_amount < MIN_BET_USD:
                 continue
