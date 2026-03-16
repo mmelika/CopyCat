@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_DIR="${APP_DIR:-/home/ec2-user/CopyCat}"
+APP_DIR="${APP_DIR:-/home/ec2-user/PolyCopy}"
 BRANCH="${BRANCH:-main}"
-WEB_SERVICE_NAME="${WEB_SERVICE_NAME:-copycat-web}"
-ENGINE_SERVICE_NAME="${ENGINE_SERVICE_NAME:-copycat-engine}"
+WEB_SERVICE_NAME="${WEB_SERVICE_NAME:-polycopy-web}"
+ENGINE_SERVICE_NAME="${ENGINE_SERVICE_NAME:-polycopy-engine}"
 
 if [ ! -d "$APP_DIR/.git" ]; then
   echo "Missing git checkout at $APP_DIR"

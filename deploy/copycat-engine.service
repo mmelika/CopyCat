@@ -1,5 +1,5 @@
 [Unit]
-Description=CopyCat Sync Engine
+Description=PolyCopy Sync Engine
 After=network.target
 StartLimitIntervalSec=60
 StartLimitBurst=10
@@ -7,9 +7,9 @@ StartLimitBurst=10
 [Service]
 Type=simple
 User=ec2-user
-WorkingDirectory=/home/ec2-user/CopyCat
+WorkingDirectory=/home/ec2-user/PolyCopy
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/home/ec2-user/CopyCat/.venv/bin/python run_engine.py
+ExecStart=/home/ec2-user/PolyCopy/.venv/bin/python run_engine.py
 Restart=always
 RestartSec=2
 TimeoutStartSec=30

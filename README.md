@@ -126,8 +126,8 @@ This repo includes EC2 deployment helpers for running the web UI and sync engine
 Typical flow:
 
 ```bash
-git clone https://github.com/mmelika/CopyCat.git
-cd CopyCat
+git clone https://github.com/mmelika/PolyCopy.git
+cd PolyCopy
 bash deploy/bootstrap_ec2.sh
 ```
 
