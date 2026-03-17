@@ -24,6 +24,7 @@ If you are searching GitHub for a `Polymarket trading bot`, `Polymarket copy bot
 - `No inferred position-delta sells by default`: temporary position API drops no longer fabricate sell events that can close and immediately reopen a follower trade.
 - `Exact sell matching`: sell reconciliation now matches by market and outcome to avoid stale-position drift.
 - `Burst-trade collapsing`: rapid fills in the same market are merged before copy logic runs.
+- `Per-fill source trade IDs`: fills from the same on-chain transaction are keyed separately so one leader transaction cannot collide into a buy plus an unintended opposite-side sell.
 - `Bootstrap sync`: the bot can seed local shadow inventory from the leader's current open positions on first run.
 - `Optional autonomous exits`: resolved losers can be swept to zero, nearly fully priced winners can auto-exit above 98c, and growth-milestone liquidation can run only when you enable autonomous sell rules.
 - `Manual controls`: pause, force sync, fresh start, liquidate-all, and per-position sell buttons are available from the dashboard.

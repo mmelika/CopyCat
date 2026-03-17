@@ -35,6 +35,24 @@ def _clean_id(value: Any) -> str:
     return str(value).strip()
 
 
+def _trade_row_id(item: dict, market_slug: str, outcome: str, side: str, created_at: str, index: int) -> str:
+    explicit_id = _clean_id(item.get("id") or item.get("tradeID") or item.get("tradeId"))
+    if explicit_id:
+        return explicit_id
+
+    tx_hash = _clean_id(item.get("transactionHash"))
+    token_id = _clean_id(item.get("asset") or item.get("tokenId") or item.get("token_id") or item.get("outcomeTokenId"))
+    if tx_hash:
+        suffix_parts = [market_slug or "unknown-market", outcome or "UNKNOWN", side or "UNKNOWN"]
+        if token_id:
+            suffix_parts.append(token_id)
+        else:
+            suffix_parts.append(str(index))
+        return f"{tx_hash}:{':'.join(suffix_parts)}"
+
+    return f"{market_slug}:{outcome}:{side}:{created_at}:{index}"
+
+
 def _wallet_like(value: str) -> bool:
     return isinstance(value, str) and value.startswith("0x") and len(value) >= 10
 
@@ -400,13 +418,8 @@ class PolymarketClient:
             amount_usd = _to_float(item.get("amount") or item.get("amountUsd") or item.get("usdc"), round(price * shares, 4))
             market_slug = item.get("marketSlug") or item.get("slug") or item.get("market_slug") or item.get("conditionId") or "unknown-market"
             outcome = item.get("outcome") or item.get("token") or item.get("outcomeName") or "UNKNOWN"
-            trade_id = (
-                item.get("id")
-                or item.get("tradeID")
-                or item.get("tradeId")
-                or item.get("transactionHash")
-                or f"{market_slug}:{outcome}:{side}:{_iso(item.get('createdAt') or item.get('timestamp'))}:{index}"
-            )
+            created_at = _iso(item.get("createdAt") or item.get("timestamp") or item.get("time"))
+            trade_id = _trade_row_id(item, market_slug, outcome, side, created_at, index)
             trades.append(
                 {
                     "source_trade_id": str(trade_id),
@@ -419,7 +432,7 @@ class PolymarketClient:
                     "price": price,
                     "shares": shares if shares > 0 else round(amount_usd / price, 6) if price else 0.0,
                     "amount_usd": amount_usd,
-                    "created_at": _iso(item.get("createdAt") or item.get("timestamp") or item.get("time")),
+                    "created_at": created_at,
                     "status": item.get("status") or "CONFIRMED",
                     "condition_id": _clean_id(item.get("conditionId") or item.get("condition_id") or item.get("marketId")),
                     "token_id": _clean_id(item.get("asset") or item.get("tokenId") or item.get("token_id") or item.get("outcomeTokenId")),
