@@ -1,0 +1,30 @@
+name: Restart EC2 Services
+
+on:
+  workflow_dispatch:
+
+jobs:
+  restart:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Restart remote services
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            export WEB_SERVICE_NAME="${{ secrets.WEB_SERVICE_NAME }}"
+            export ENGINE_SERVICE_NAME="${{ secrets.ENGINE_SERVICE_NAME }}"
+            export WEB_SERVICE_NAME="${WEB_SERVICE_NAME:-copycat-web}"
+            export ENGINE_SERVICE_NAME="${ENGINE_SERVICE_NAME:-copycat-engine}"
+            sudo systemctl restart "$WEB_SERVICE_NAME" "$ENGINE_SERVICE_NAME"
+            sleep 5
+            echo "== systemctl status: $WEB_SERVICE_NAME =="
+            sudo systemctl --no-pager --full status "$WEB_SERVICE_NAME" | sed -n '1,40p'
+            echo "== systemctl status: $ENGINE_SERVICE_NAME =="
+            sudo systemctl --no-pager --full status "$ENGINE_SERVICE_NAME" | sed -n '1,40p'
+            echo "== engine journal tail =="
+            sudo journalctl -u "$ENGINE_SERVICE_NAME" -n 80 --no-pager
+            echo "== localhost healthz =="
+            curl -fsS http://127.0.0.1:8060/healthz
