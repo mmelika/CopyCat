@@ -17,6 +17,9 @@ from .polymarket import PolymarketClient
 MIN_BET_USD = 0.05
 MIN_SETTLEMENT_USD = 0.01
 MEANINGFUL_MIN_BET_USD = 1.00
+MIN_SOURCE_BUY_COPY_USD = 10.0
+LIVE_TEST_ORDER_USD = 1.01
+COLLATERAL_DECIMALS = 6
 MIN_CASH_RESERVE_PCT = 0.20
 BASE_SINGLE_BET_CASH_PCT = 0.20
 MAX_TRADE_FETCH_LIMIT = 10
@@ -28,6 +31,7 @@ RESOLVED_LOSS_PRICE_THRESHOLD = 0.001
 RESOLVED_SWEEP_MAX_POSITIONS = 120
 PORTFOLIO_GROWTH_STEP_PCT = 0.50
 PORTFOLIO_GROWTH_STABILITY_SECONDS = 15
+PORTFOLIO_GROWTH_MAX_TARGET_USD = 100000.0
 HIGH_CONVICTION_TRADE_USD = 1000.0
 MAX_BUY_EXPIRY_HOURS = 24
 POSITION_CAP_ACTIVATION_EQUITY_USD = 2000.0
@@ -277,6 +281,16 @@ def _round_up_to_cent(value: float) -> float:
     if value <= 0:
         return 0.0
     return math.ceil(value * 100) / 100.0
+
+
+def _normalize_collateral_balance(value: object) -> float:
+    try:
+        raw_value = float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    if raw_value <= 0:
+        return 0.0
+    return round(raw_value / (10**COLLATERAL_DECIMALS), 2)
 
 
 def _copy_trade_size(
@@ -676,6 +690,45 @@ class LiveBroker:
         self._clob_client = None
         self._clob_client_key = None
 
+    def _test_mode_config(self) -> dict:
+        enabled = (os.environ.get("LIVE_TEST_MODE") or "").strip().lower() in {"1", "true", "yes", "on"}
+        max_order_raw = (os.environ.get("LIVE_TEST_MAX_ORDER_USD") or "").strip()
+        allowed_markets_raw = (os.environ.get("LIVE_TEST_ALLOWED_MARKET_SLUGS") or "").strip()
+        max_order_usd = LIVE_TEST_ORDER_USD
+        if max_order_raw:
+            try:
+                max_order_usd = max(float(max_order_raw), LIVE_TEST_ORDER_USD)
+            except ValueError:
+                max_order_usd = LIVE_TEST_ORDER_USD
+        allowed_markets = {
+            slug.strip()
+            for slug in allowed_markets_raw.split(",")
+            if slug.strip()
+        }
+        return {
+            "enabled": enabled,
+            "max_order_usd": round(max_order_usd, 2),
+            "allowed_markets": allowed_markets,
+        }
+
+    def _apply_test_mode(self, source_trade: dict, requested_amount_usd: float) -> tuple[float, dict]:
+        config = self._test_mode_config()
+        if not config["enabled"]:
+            return requested_amount_usd, config
+
+        market_slug = (source_trade.get("market_slug") or "").strip()
+        allowed_markets = config["allowed_markets"]
+        if allowed_markets and market_slug not in allowed_markets:
+            raise RuntimeError(
+                f"Live test mode blocks {market_slug or 'unknown-market'} because it is not in LIVE_TEST_ALLOWED_MARKET_SLUGS."
+            )
+
+        capped_amount = min(round(float(requested_amount_usd or 0.0), 2), float(config["max_order_usd"]))
+        capped_amount = max(capped_amount, LIVE_TEST_ORDER_USD if requested_amount_usd > 0 else 0.0)
+        if capped_amount <= 0:
+            raise RuntimeError("Live test mode reduced the order amount below the minimum executable size.")
+        return capped_amount, config
+
     def _wallet_address(self, settings: dict) -> str:
         return (settings.get("live_wallet_address") or "").strip()
 
@@ -762,9 +815,19 @@ class LiveBroker:
             live_client = self._live_client(settings)
             balance = live_client.get_balance_allowance(BalanceAllowanceParams(asset_type=AssetType.COLLATERAL))
             if isinstance(balance, dict):
-                cash_balance = round(float(balance.get("balance") or balance.get("available_balance") or 0.0), 2)
+                cash_balance = _normalize_collateral_balance(balance.get("balance") or balance.get("available_balance") or 0.0)
         except Exception as exc:
             live_error = str(exc)
+            previous_snapshot = database.latest_live_account_snapshot(wallet_address, db_path)
+            previous_snapshot_ts = _parse_iso((previous_snapshot or {}).get("ts") or "")
+            previous_cash_balance = round(float((previous_snapshot or {}).get("cash_balance") or 0.0), 2)
+            if (
+                previous_snapshot_ts is not None
+                and (datetime.now(timezone.utc) - previous_snapshot_ts).total_seconds() <= 60
+                and previous_cash_balance > 0
+            ):
+                cash_balance = previous_cash_balance
+                live_error = f"{live_error} (using cached collateral balance)"
         snapshot = {
             "wallet_address": wallet_address,
             "cash_balance": cash_balance,
@@ -797,6 +860,7 @@ class LiveBroker:
         live_client = self._live_client(settings)
         if not bool(int(settings.get("live_trading_enabled") or 0)):
             raise RuntimeError("Live trading is disabled in settings.")
+        requested_amount_usd, test_mode_config = self._apply_test_mode(source_trade, requested_amount_usd)
         intent = self.client.build_live_order_intent(
             market_slug=source_trade.get("market_slug") or "",
             outcome=source_trade.get("outcome") or "",
@@ -866,6 +930,8 @@ class LiveBroker:
             "book_price": intent["book_price"],
             "price_buffer_bps": intent["price_buffer_bps"],
             "submission_enabled": True,
+            "test_mode": bool(test_mode_config["enabled"]),
+            "test_mode_max_order_usd": float(test_mode_config["max_order_usd"]),
             "raw_response": live_order_payload or {},
         }
         self._record_live_intent(order, db_path)
@@ -970,6 +1036,16 @@ class CopyTradingEngine:
         database.set_app_state("engine_status", "RUNNING" if enabled else "PAUSED", self.db_path)
         database.log("INFO", "engine", f"Engine set to {'RUNNING' if enabled else 'PAUSED'}.", db_path=self.db_path)
 
+    def _sync_live_cash_balance(self, snapshot: dict) -> None:
+        snapshot_error = str(snapshot.get("error") or "").strip()
+        try:
+            cash_balance = round(max(float(snapshot.get("cash_balance") or 0.0), 0.0), 2)
+        except (TypeError, ValueError):
+            return
+        if snapshot_error and cash_balance <= 0:
+            return
+        database.update_settings({"paper_cash_balance": cash_balance}, self.db_path)
+
     def tick(self, force: bool = False) -> dict:
         with self._lock:
             return self._tick(force=force)
@@ -989,9 +1065,28 @@ class CopyTradingEngine:
         copied = 0
         failed = 0
         message = "Sync complete."
+        live_cash_balance_override = None
         try:
             if self._execution_mode(settings) == "live":
-                self.live_broker.refresh_account_snapshot(settings, self.db_path)
+                live_snapshot = self.live_broker.refresh_account_snapshot(settings, self.db_path)
+                self._sync_live_cash_balance(live_snapshot)
+                live_cash_balance_override = round(max(float(live_snapshot.get("cash_balance") or 0.0), 0.0), 2)
+                snapshot_error = str(live_snapshot.get("error") or "").strip()
+                if snapshot_error:
+                    pause_reason = f"Paused live engine because collateral balance refresh failed: {snapshot_error}"
+                    database.set_app_state("engine_status", "PAUSED", self.db_path)
+                    database.set_app_state("last_sync_message", pause_reason, self.db_path)
+                    database.log(
+                        "ERROR",
+                        "live",
+                        pause_reason,
+                        {
+                            "wallet_address": live_snapshot.get("wallet_address"),
+                            "cash_balance": live_snapshot.get("cash_balance"),
+                        },
+                        self.db_path,
+                    )
+                    raise RuntimeError(pause_reason)
             target = settings["target_wallet"] or settings["target_handle"]
             profile = self.client.resolve_target_wallet(target)
             previous_local_positions = database.get_local_positions(self.db_path)
@@ -1034,11 +1129,18 @@ class CopyTradingEngine:
                 settings,
                 leader_wallet_value,
                 positions,
+                cash_balance_override=live_cash_balance_override,
             )
             database.upsert_source_trades(all_seen_trades, self.db_path)
             self._finalize_fresh_trade_records(eligible_fresh_trades)
             self._mark_prestart_trades(prestart_trades, app_state.get("copy_start_at", ""))
-            backlog_copied, backlog_failed = self._copy_pending(settings, leader_wallet_value, app_state.get("copy_start_at", ""), positions)
+            backlog_copied, backlog_failed = self._copy_pending(
+                settings,
+                leader_wallet_value,
+                app_state.get("copy_start_at", ""),
+                positions,
+                cash_balance_override=live_cash_balance_override,
+            )
             copied += backlog_copied
             failed += backlog_failed
             copied += bootstrap_copied
@@ -1531,12 +1633,25 @@ class CopyTradingEngine:
             )
             return True
 
-    def _copy_trades_first(self, trades: list[dict], settings: dict, leader_wallet_value: float, source_positions: list[dict]) -> tuple[int, int]:
+    def _copy_trades_first(
+        self,
+        trades: list[dict],
+        settings: dict,
+        leader_wallet_value: float,
+        source_positions: list[dict],
+        cash_balance_override: float | None = None,
+    ) -> tuple[int, int]:
         copied = 0
         failed = 0
         self._latest_results = []
         for trade in trades:
-            decision = self._decide_copy_trade(trade, settings, leader_wallet_value, source_positions)
+            decision = self._decide_copy_trade(
+                trade,
+                settings,
+                leader_wallet_value,
+                source_positions,
+                cash_balance_override=cash_balance_override,
+            )
             result = {
                 "trade_id": trade["source_trade_id"],
                 "copy_status": "skipped",
@@ -1596,7 +1711,14 @@ class CopyTradingEngine:
                 self.db_path,
             )
 
-    def _copy_pending(self, settings: dict, leader_wallet_value: float, copy_start_at: str, source_positions: list[dict]) -> tuple[int, int]:
+    def _copy_pending(
+        self,
+        settings: dict,
+        leader_wallet_value: float,
+        copy_start_at: str,
+        source_positions: list[dict],
+        cash_balance_override: float | None = None,
+    ) -> tuple[int, int]:
         copied = 0
         failed = 0
         for trade in database.list_pending_source_trades(self.db_path):
@@ -1608,7 +1730,13 @@ class CopyTradingEngine:
                     db_path=self.db_path,
                 )
                 continue
-            decision = self._decide_copy_trade(trade, settings, leader_wallet_value, source_positions)
+            decision = self._decide_copy_trade(
+                trade,
+                settings,
+                leader_wallet_value,
+                source_positions,
+                cash_balance_override=cash_balance_override,
+            )
             if decision.action == "skip":
                 database.mark_source_trade(trade["source_trade_id"], "skipped", last_error=decision.reason, db_path=self.db_path)
                 database.log("INFO", "copy", f"Skipped {trade['source_trade_id']}.", {"reason": decision.reason}, self.db_path)
@@ -1634,9 +1762,20 @@ class CopyTradingEngine:
                 database.log("ERROR", "copy", f"Copy failed for {trade['source_trade_id']}.", {"error": str(exc)}, self.db_path)
         return copied, failed
 
-    def _decide_copy_trade(self, trade: dict, settings: dict, leader_wallet_value: float, source_positions: list[dict]) -> CopyDecision:
+    def _decide_copy_trade(
+        self,
+        trade: dict,
+        settings: dict,
+        leader_wallet_value: float,
+        source_positions: list[dict],
+        cash_balance_override: float | None = None,
+    ) -> CopyDecision:
         side = trade["side"]
         portfolio = database.portfolio_totals(self.db_path, source_positions)
+        if cash_balance_override is not None:
+            live_cash_balance = round(max(float(cash_balance_override), 0.0), 2)
+            portfolio["cash_balance"] = live_cash_balance
+            portfolio["net_value"] = round(live_cash_balance + float(portfolio["gross_exposure"]), 2)
         local_equity = max(float(portfolio["net_value"]), 0.0)
         cash_balance = float(portfolio["cash_balance"])
         now = datetime.now(timezone.utc)
@@ -1665,6 +1804,12 @@ class CopyTradingEngine:
             return CopyDecision("skip", "Sell copying disabled.")
 
         if side == "BUY":
+            source_amount_usd = round(float(trade.get("amount_usd") or 0.0), 2)
+            if source_amount_usd <= MIN_SOURCE_BUY_COPY_USD:
+                return CopyDecision(
+                    "skip",
+                    f"Leader buy size ${source_amount_usd:.2f} is at or below the ${MIN_SOURCE_BUY_COPY_USD:.2f} minimum.",
+                )
             expiry_guard_reason = _buy_expiry_guard_reason(trade, now=now)
             if expiry_guard_reason:
                 return CopyDecision("skip", expiry_guard_reason)

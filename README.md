@@ -19,6 +19,7 @@ If you are searching GitHub for a `Polymarket trading bot`, `Polymarket copy bot
 - `Proportional sizing`: buy size is based on the leader account value versus your local shadow equity.
 - `Correlation-aware sizing`: correlated or high-conviction buys can use more of the available shadow cash.
 - `Cash-reserve aware execution`: buys are constrained by deployable cash, not the older exposure-cap logic.
+- `Minimum leader buy filter`: leader buys at `$10.00` or below are ignored, so copied buys only trigger when the source trade is greater than `$10.00`.
 - `Tiered position cap`: once follower equity is above `$2,000`, each position is capped at `$400`, and that cap increases by `$400` for each additional `$2,500` of equity.
 - `Sell copying controls`: sells can be mirrored or ignored from settings.
 - `Leader-only sells by default`: follower positions now stay open unless the leader reduces, you sell manually, or you explicitly enable autonomous exit rules.
@@ -32,6 +33,8 @@ If you are searching GitHub for a `Polymarket trading bot`, `Polymarket copy bot
 - `Audit tooling`: `/healthz`, `/audit/profit`, `/audit/shadow`, `/audit/shadow/closed`, and `/audit/reconcile` help verify the bot's state.
 - `Safer SQLite concurrency`: WAL mode is initialized once instead of on every request, which reduces lock churn when the web app and sync engine share the same database.
 - `Live execution scaffold`: there is a guarded Polymarket CLOB order-intent path and live account reconciliation, but this should be treated as non-production.
+- `Live entry drift tracking`: live order intents now calculate entry drift from the live limit price versus the source/reference price, and the dashboard summarizes that drag alongside shadow drift.
+- `Per-position drift visibility`: the Active Holdings rows now show drift per position, including average entry drift in bps and cumulative drag for that holding.
 
 ## What This Repo Is Not
 
@@ -55,6 +58,7 @@ The local UI is built for operating a Polymarket shadow trading bot in real time
 - top-bar runtime status, heartbeat, execution mode, and control buttons
 - shadow portfolio breakdown and realized performance
 - 1D, 1W, 1M, and all-time portfolio curves
+- active holdings rows with per-position drift details
 - open-position and closed-trade views with a per-position sell button on open rows
 - target trade feed and copied-order history
 - sell-match auditing and reconciliation visibility
@@ -70,7 +74,7 @@ pip install -r requirements.txt
 python3 app.py
 ```
 
-The app listens on `0.0.0.0:8060` by default, so open [http://127.0.0.1:8060](http://127.0.0.1:8060) locally or `http://YOUR_SERVER_IP:8060` from another machine. You can override that with `HOST` and `PORT`.
+The app listens on `0.0.0.0:8060` by default, so open [http://127.0.0.1:8060](http://127.0.0.1:8060) locally or `http://YOUR_SERVER_IP:8060` from another machine. You can override that with `HOST` and `PORT`. For reverse-proxy deployments, `APP_BASE_PATH` and `APP_ROUTES_PATH` let one instance live under a subpath such as `/shadow/`.
 
 To run the sync worker separately instead of inside the web process:
 
@@ -87,12 +91,35 @@ Most runtime settings are editable from the dashboard:
 - shadow starting balance and current cash balance
 - sync interval and trade fetch limit
 - copy-sells on or off
+- minimum copied leader buy size: source buys must be greater than `$10.00`
 - explicit leader sells only or optional inferred position-delta sells
 - leader-only sells or optional autonomous exit rules
 - shadow slippage and extra shadow slippage
 - execution mode: `shadow` or guarded `live` scaffold
 
+Temporary live test mode is environment-based so you can keep the same wallet and keys while forcing tiny live orders:
+
+```env
+LIVE_TEST_MODE=1
+LIVE_TEST_MAX_ORDER_USD=1.01
+LIVE_TEST_ALLOWED_MARKET_SLUGS=
+```
+
+When `LIVE_TEST_MODE=1`, the live broker forces every submitted live order to exactly the test band: a minimum of `$1.01` and a maximum of `LIVE_TEST_MAX_ORDER_USD`, which now defaults to `$1.01`. If `LIVE_TEST_ALLOWED_MARKET_SLUGS` is set, it must be a comma-separated allowlist of market slugs and live orders for any other market are rejected before submission. This only affects live execution; the shadow engine and copy-decision math stay unchanged.
+
+The live dashboard cash snapshot normalizes CLOB collateral balances from raw base units to display dollars. If the exchange returns a value like `9486331`, the app now interprets that as `$9.49` rather than `$9,486,331`.
+If the live collateral call fails transiently but a recent successful snapshot exists, the app reuses that recent collateral balance instead of briefly overwriting the dashboard with zero.
+In live mode, the copy-decision path now uses that same live collateral snapshot directly for cash sizing, so the live engine can run independently with the same decision logic as shadow mode while sourcing cash from the live Polymarket account instead of a shadow balance setting. If the live collateral refresh fails, the live engine pauses itself rather than continuing with a stale or zeroed cash input.
+The live dashboard's Active Holdings panel now renders from the latest live account snapshot positions instead of the local copy-order ledger, so live holdings reflect the actual Polymarket wallet inventory the engine most recently fetched.
+If the live snapshot table is missing or unavailable, the dashboard falls back to the older local portfolio view instead of failing the whole page.
+
 Defaults are seeded from [`copytrader/config.py`](copytrader/config.py).
+
+On a small EC2 instance, the main stability levers are:
+
+- keep the sync interval conservative; the default is `2500ms`, not sub-second polling
+- avoid oversizing Gunicorn workers for Dash; the shipped EC2 unit uses `1` worker and `2` threads
+- let Gunicorn recycle workers periodically with `--max-requests` to avoid long-lived worker bloat
 
 ## Operations
 
@@ -117,6 +144,26 @@ Backup the database:
 bash scripts/backup_db.sh
 ```
 
+Run a parity replay audit:
+
+```bash
+python3 scripts/parity_replay_audit.py \
+  --source-db data/copytrader.db
+```
+
+To compare the hypothetical leader-sized replay against a live or shadow instance, point the script at a second DB and the relevant order tables. This is useful when a live instance had less cash or different inventory than the shadow instance, and you want to know whether the engine logic would otherwise have taken the same trades:
+
+```bash
+python3 scripts/parity_replay_audit.py \
+  --source-db /tmp/shadow.db \
+  --compare-db /tmp/live.db \
+  --compare-tables copy_orders,live_order_attempts \
+  --restrict-to-compare-source-trades \
+  --since-hours 12
+```
+
+The replay injects only the minimum cash needed to mirror source trade notional 1:1 and replays the full source history so sells have the same inventory context. By default it filters compare-table failures that only say the wallet already owned the shares, because those do not indicate a copy-logic mismatch.
+
 Persistence lives in [`data/copytrader.db`](data/copytrader.db).
 
 ## Deploy
@@ -137,13 +184,39 @@ cd PolyCopy
 bash deploy/bootstrap_ec2.sh
 ```
 
-For EC2, browse to `http://YOUR_EC2_PUBLIC_IP` after bootstrap. Nginx listens on port `80` and proxies to the app on port `8060`, so the public URL should normally use port `80`, not `8060`.
+To run a second instance on the same EC2 box, give it a different port and service names and skip the Nginx rewrite:
+
+```bash
+APP_DIR=/home/ec2-user/CopyCat \
+PORT=8061 \
+WEB_SERVICE_NAME=polycopy-shadow-web \
+ENGINE_SERVICE_NAME=polycopy-shadow-engine \
+CONFIGURE_NGINX=0 \
+bash deploy/bootstrap_ec2.sh
+```
+
+That pattern lets one app stay behind Nginx on port `80` while another app runs directly on a second port such as `8061`.
+The bootstrap helper rewrites both the app `PORT` environment variable and the Gunicorn bind port, so each service can actually listen on its own port.
+
+For EC2, browse to `http://YOUR_EC2_PUBLIC_IP` after bootstrap. Nginx listens on port `80` and can proxy different app instances by path, for example the live app on `/` and a shadow app on `/shadow/`, instead of exposing raw Gunicorn ports directly.
 
 Your AWS security group must allow:
 
 - inbound TCP `80` for the site through Nginx
 - inbound TCP `22` for SSH
 - inbound TCP `8060` only if you intentionally want to bypass Nginx and hit the app directly
+
+If the instance starts timing out on both HTTP and SSH, treat it as host pressure first, not just an Nginx problem. The common checks are:
+
+```bash
+sudo journalctl -u polycopy-web -u polycopy-engine -u nginx -n 200 --no-pager
+sudo dmesg -T | tail -n 100
+free -m
+uptime
+top
+```
+
+The most likely failure mode on a small instance is resource exhaustion or restart thrash: the web process, the sync engine, SQLite activity, and repeated outbound Polymarket requests all compete for the same CPU and memory budget.
 
 ## SEO Notes
 

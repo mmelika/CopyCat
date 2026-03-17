@@ -11,7 +11,7 @@ WorkingDirectory=/home/ec2-user/PolyCopy
 Environment=PYTHONUNBUFFERED=1
 Environment=HOST=0.0.0.0
 Environment=PORT=8060
-ExecStart=/home/ec2-user/PolyCopy/.venv/bin/gunicorn --workers 2 --threads 4 --bind 0.0.0.0:8060 wsgi:server
+ExecStart=/home/ec2-user/PolyCopy/.venv/bin/gunicorn --workers 1 --threads 2 --timeout 120 --graceful-timeout 30 --keep-alive 5 --max-requests 500 --max-requests-jitter 50 --bind 0.0.0.0:8060 wsgi:server
 Restart=always
 RestartSec=2
 TimeoutStartSec=30

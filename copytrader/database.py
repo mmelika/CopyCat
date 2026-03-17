@@ -723,7 +723,93 @@ def list_live_order_attempts(limit: int = 100, db_path: Path | str = DB_PATH) ->
             "SELECT * FROM live_order_attempts ORDER BY datetime(created_at) DESC, live_order_id DESC LIMIT ?",
             (limit,),
         ).fetchall()
-    return [dict(row) for row in rows]
+    items = []
+    for row in rows:
+        item = dict(row)
+        try:
+            payload = json.loads(item.get("raw_json") or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            payload = {}
+        if isinstance(payload, dict):
+            item.update(payload)
+        items.append(item)
+    return items
+
+
+def _order_entry_drift(order: dict) -> tuple[float, float]:
+    reference_price = float(order.get("reference_price") or order.get("book_price") or 0.0)
+    entry_price = float(order.get("limit_price") or order.get("estimated_live_price") or 0.0)
+    side = (order.get("side") or "").upper()
+
+    if reference_price <= 0 or entry_price <= 0:
+        return 0.0, 0.0
+
+    signed_bps = ((entry_price - reference_price) / reference_price) * 10000.0
+    if side == "SELL":
+        signed_bps *= -1
+
+    estimated_shares = float(order.get("estimated_shares") or order.get("estimated_live_shares") or 0.0)
+    if estimated_shares <= 0 and entry_price > 0:
+        estimated_shares = float(order.get("requested_amount_usd") or 0.0) / entry_price
+    signed_drag_usd = estimated_shares * (entry_price - reference_price)
+    if side == "SELL":
+        signed_drag_usd *= -1
+    return signed_bps, signed_drag_usd
+
+
+def order_entry_drift_by_position(orders: list[dict]) -> dict[str, dict]:
+    aggregates: dict[str, dict] = {}
+    for row in orders or []:
+        market_slug = (row.get("market_slug") or "").strip()
+        outcome = (row.get("outcome") or "").strip()
+        position_key = (row.get("position_key") or "").strip()
+        if not position_key and market_slug and outcome:
+            position_key = f"{market_slug}:{outcome}"
+        if not position_key:
+            continue
+        price_delta_bps, execution_drag_usd = _order_entry_drift(row)
+        aggregate = aggregates.setdefault(
+            position_key,
+            {
+                "total": 0,
+                "avg_abs_price_delta_bps": 0.0,
+                "total_execution_drag_usd": 0.0,
+            },
+        )
+        aggregate["total"] += 1
+        aggregate["avg_abs_price_delta_bps"] += abs(price_delta_bps)
+        aggregate["total_execution_drag_usd"] += execution_drag_usd
+    for aggregate in aggregates.values():
+        total = int(aggregate["total"] or 0)
+        aggregate["avg_abs_price_delta_bps"] = round(float(aggregate["avg_abs_price_delta_bps"]) / total, 2) if total else 0.0
+        aggregate["total_execution_drag_usd"] = round(float(aggregate["total_execution_drag_usd"]), 4)
+    return aggregates
+
+
+def live_order_summary(db_path: Path | str = DB_PATH) -> dict:
+    orders = list_live_order_attempts(10000, db_path)
+    if not orders:
+        return {
+            "total": 0,
+            "avg_abs_price_delta_bps": 0.0,
+            "max_abs_price_delta_bps": 0.0,
+            "total_execution_drag_usd": 0.0,
+        }
+
+    abs_bps = []
+    total_drag = 0.0
+    for row in orders:
+        price_delta_bps, execution_drag_usd = _order_entry_drift(row)
+        abs_bps.append(abs(price_delta_bps))
+        total_drag += execution_drag_usd
+
+    total = len(orders)
+    return {
+        "total": total,
+        "avg_abs_price_delta_bps": round(sum(abs_bps) / total, 2),
+        "max_abs_price_delta_bps": round(max(abs_bps), 2),
+        "total_execution_drag_usd": round(total_drag, 4),
+    }
 
 
 def snapshot_live_account(
@@ -743,6 +829,31 @@ def snapshot_live_account(
             """,
             (utc_now(), wallet_address, cash_balance, gross_exposure, net_value, positions_count, _json(payload)),
         )
+
+
+def latest_live_account_snapshot(wallet_address: str = "", db_path: Path | str = DB_PATH) -> dict | None:
+    with connect(db_path) as conn:
+        if wallet_address:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM live_account_snapshots
+                WHERE wallet_address=?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (wallet_address,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM live_account_snapshots
+                ORDER BY id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+    return dict(row) if row else None
 
 
 def list_shadow_orders(limit: int = 100, db_path: Path | str = DB_PATH) -> list[dict]:

@@ -16,7 +16,7 @@ DEFAULT_SETTINGS = {
     "live_trading_enabled": 0,
     "live_max_order_usd": 25.0,
     "live_price_buffer_bps": 20,
-    "sync_interval_ms": 1200,
+    "sync_interval_ms": 2500,
     "trade_fetch_limit": 10,
     "max_total_exposure_usd": 100.0,
     "paper_starting_balance": 100.0,

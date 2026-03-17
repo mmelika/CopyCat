@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 import os
 from zoneinfo import ZoneInfo
 
@@ -17,17 +18,22 @@ from copytrader.polymarket import PolymarketClient
 
 database.init_db(DB_PATH)
 
-base_path = os.environ.get("DASH_URL_BASE_PATHNAME", "/").strip() or "/"
+base_path = os.environ.get("APP_BASE_PATH", "/").strip() or "/"
 if not base_path.startswith("/"):
     base_path = f"/{base_path}"
 if not base_path.endswith("/"):
     base_path = f"{base_path}/"
+routes_path = os.environ.get("APP_ROUTES_PATH", base_path).strip() or "/"
+if not routes_path.startswith("/"):
+    routes_path = f"/{routes_path}"
+if not routes_path.endswith("/"):
+    routes_path = f"{routes_path}/"
 
 app = dash.Dash(
     __name__,
     suppress_callback_exceptions=True,
     requests_pathname_prefix=base_path,
-    routes_pathname_prefix=base_path,
+    routes_pathname_prefix=routes_path,
 )
 app.title = "CopyPelosi"
 server = app.server
@@ -847,6 +853,89 @@ def shadow_portfolio_totals_from_analytics(settings: dict, analytics: dict, shad
     }
 
 
+def live_snapshot_positions(snapshot: dict | None) -> list[dict]:
+    if not snapshot:
+        return []
+    raw_json = snapshot.get("raw_json") or ""
+    try:
+        payload = json.loads(raw_json)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        payload = {}
+    raw_positions = payload.get("positions") if isinstance(payload, dict) else []
+    if not isinstance(raw_positions, list):
+        return []
+
+    positions = []
+    for item in raw_positions:
+        if not isinstance(item, dict):
+            continue
+        shares = float(item.get("shares") or 0.0)
+        market_value = round(float(item.get("notional_usd") or 0.0), 2)
+        current_price = round(float(item.get("price") or 0.0), 3)
+        if shares <= 0 or market_value <= 0:
+            continue
+        positions.append(
+            {
+                "position_key": item.get("position_key") or f"{item.get('market_slug') or ''}:{item.get('outcome') or ''}",
+                "market_slug": item.get("market_slug") or "",
+                "market_title": item.get("market_title") or item.get("market_slug") or "Unknown market",
+                "outcome": item.get("outcome") or "UNKNOWN",
+                "shares": shares,
+                "market_value": market_value,
+                "current_price": current_price,
+                "updated_at": item.get("updated_at") or "",
+            }
+        )
+    positions.sort(key=lambda row: (float(row["market_value"]), row.get("updated_at") or ""), reverse=True)
+    return positions
+
+
+def latest_live_snapshot_safe(wallet_address: str) -> dict | None:
+    try:
+        return database.latest_live_account_snapshot(wallet_address or "")
+    except Exception:
+        return None
+
+
+def list_live_order_attempts_safe(limit: int) -> list[dict]:
+    try:
+        return database.list_live_order_attempts(limit, DB_PATH)
+    except Exception:
+        return []
+
+
+def live_order_summary_safe() -> dict:
+    try:
+        return database.live_order_summary(DB_PATH)
+    except Exception:
+        return {
+            "total": 0,
+            "avg_abs_price_delta_bps": 0.0,
+            "max_abs_price_delta_bps": 0.0,
+            "total_execution_drag_usd": 0.0,
+        }
+
+
+def live_portfolio_totals_from_snapshot(settings: dict, snapshot: dict | None, positions: list[dict]) -> dict:
+    cash_balance = round(float((snapshot or {}).get("cash_balance") or 0.0), 2)
+    gross_exposure = round(float((snapshot or {}).get("gross_exposure") or 0.0), 2)
+    positions_count = int((snapshot or {}).get("positions_count") or len(positions))
+    net_value = round(cash_balance + gross_exposure, 2)
+    starting_balance = float(settings["paper_starting_balance"])
+    total_gain = round(net_value - starting_balance, 2)
+    total_gain_pct = round((total_gain / starting_balance) * 100, 2) if starting_balance else 0.0
+    return {
+        "cash_balance": cash_balance,
+        "gross_exposure": gross_exposure,
+        "net_value": net_value,
+        "positions_count": positions_count,
+        "realized_pnl": 0.0,
+        "starting_balance": starting_balance,
+        "total_gain": total_gain,
+        "total_gain_pct": total_gain_pct,
+    }
+
+
 def portfolio_chart(range_key: str):
     settings = database.get_settings(DB_PATH)
     snapshots, shadow_snapshots = load_snapshots_for_range(range_key)
@@ -1047,10 +1136,13 @@ def refresh_dashboard(_, trade_tab):
     logs = database.list_logs(14, DB_PATH)
     analytics = database.trade_analytics(DB_PATH, live_positions)
     portfolio = portfolio_totals_from_analytics(settings, analytics)
+    live_snapshot = latest_live_snapshot_safe(settings.get("live_wallet_address") or "")
+    live_snapshot_open_positions = live_snapshot_positions(live_snapshot)
     if shadow_mode_active:
         shadow_orders = database.list_shadow_orders(8, DB_PATH)
         shadow_orders_all = database.list_all_shadow_orders(DB_PATH)
         shadow_summary = database.shadow_order_summary(DB_PATH)
+        position_drift_by_key = database.order_entry_drift_by_position(shadow_orders_all)
         shadow_analytics = database.shadow_trade_analytics(DB_PATH, live_positions)
         shadow_portfolio = shadow_portfolio_totals_from_analytics(settings, shadow_analytics, shadow_orders_all)
     else:
@@ -1074,10 +1166,28 @@ def refresh_dashboard(_, trade_tab):
             "total_gain": 0.0,
             "total_gain_pct": 0.0,
         }
+        live_orders = list_live_order_attempts_safe(8)
+        position_drift_by_key = database.order_entry_drift_by_position(list_live_order_attempts_safe(10000))
+        live_summary = live_order_summary_safe()
+    if shadow_mode_active:
+        live_orders = []
+        live_summary = {
+            "total": 0,
+            "avg_abs_price_delta_bps": 0.0,
+            "max_abs_price_delta_bps": 0.0,
+            "total_execution_drag_usd": 0.0,
+        }
+    live_position_drift_by_key = position_drift_by_key if not shadow_mode_active else {}
+    shadow_position_drift_by_key = position_drift_by_key if shadow_mode_active else {}
     shadow_has_history = shadow_mode_active and shadow_summary["total"] > 0
-    primary_name = "shadow" if shadow_mode_active else "paper"
+    live_has_history = (not shadow_mode_active) and live_summary["total"] > 0
+    primary_name = "shadow" if shadow_mode_active else "live"
     primary_analytics = shadow_analytics if shadow_mode_active else analytics
-    primary_portfolio = shadow_portfolio if shadow_mode_active else portfolio
+    primary_portfolio = (
+        shadow_portfolio
+        if shadow_mode_active
+        else live_portfolio_totals_from_snapshot(settings, live_snapshot, live_snapshot_open_positions) if live_snapshot_open_positions or live_snapshot else portfolio
+    )
     daily_performance = (
         database.shadow_daily_portfolio_performance(DB_PATH)[:12]
         if shadow_mode_active
@@ -1170,9 +1280,9 @@ def refresh_dashboard(_, trade_tab):
     closed_trade_count = len(primary_analytics["closed_trades"])
     realized_win_rate = round((win_count / closed_trade_count) * 100, 1) if closed_trade_count else 0.0
     realized_return_pct = round((total_realized_pnl / total_closed_cost) * 100, 2) if total_closed_cost else 0.0
-    all_open_positions = primary_analytics["open_positions"]
+    all_open_positions = primary_analytics["open_positions"] if shadow_mode_active else live_snapshot_open_positions
     open_positions = all_open_positions[:8]
-    top_holding = primary_analytics["open_positions"][0] if primary_analytics["open_positions"] else None
+    top_holding = all_open_positions[0] if all_open_positions else None
     holdings_list = []
     holdings_list.append(
         html.Div(
@@ -1199,6 +1309,14 @@ def refresh_dashboard(_, trade_tab):
     for row in open_positions:
         shown_holdings_value += float(row["market_value"])
         allocation_pct = round((float(row["market_value"]) / net_value) * 100, 1) if net_value else 0.0
+        live_mode_holding = not shadow_mode_active
+        drift = (live_position_drift_by_key if live_mode_holding else shadow_position_drift_by_key).get(row["position_key"], {})
+        drift_total = int(drift.get("total") or 0)
+        drift_subtitle = (
+            f" | drift {float(drift.get('avg_abs_price_delta_bps') or 0.0):.1f}bps over {drift_total} fill{'s' if drift_total != 1 else ''}"
+            if drift_total
+            else ""
+        )
         holdings_list.append(
             html.Div(
                 className="portfolio-holding-row",
@@ -1208,7 +1326,11 @@ def refresh_dashboard(_, trade_tab):
                         children=[
                             market_link(row["market_title"], row["market_slug"], 42),
                             html.Div(
-                                f"{row['outcome']} | spent {fmt_currency(row['cost_basis'])} @ avg {fmt_number(row['avg_price'], 3)}",
+                                (
+                                    f"{row['outcome']} | {fmt_number(row['shares'], 2)} shares @ mark {fmt_number(row['current_price'], 3)}{drift_subtitle}"
+                                    if live_mode_holding
+                                    else f"{row['outcome']} | spent {fmt_currency(row['cost_basis'])} @ avg {fmt_number(row['avg_price'], 3)}{drift_subtitle}"
+                                ),
                                 className="portfolio-holding-subtitle",
                             ),
                         ],
@@ -1218,7 +1340,25 @@ def refresh_dashboard(_, trade_tab):
                         children=[
                             html.Div(f"{allocation_pct:.1f}%", className="portfolio-holding-weight"),
                             html.Div(fmt_currency(row["market_value"]), className="portfolio-holding-amount"),
-                            html.Div(fmt_signed_currency(row["unrealized_pnl"]), className=f"portfolio-holding-pnl {signed_class(row['unrealized_pnl'])}"),
+                            (
+                                html.Div(
+                                    f"{fmt_number(row['shares'], 2)} sh",
+                                    className="portfolio-holding-pnl text-muted",
+                                )
+                                if live_mode_holding
+                                else html.Div(
+                                    fmt_signed_currency(row["unrealized_pnl"]),
+                                    className=f"portfolio-holding-pnl {signed_class(row['unrealized_pnl'])}",
+                                )
+                            ),
+                            (
+                                html.Div(
+                                    f"drag {fmt_currency(abs(float(drift.get('total_execution_drag_usd') or 0.0)))}",
+                                    className="portfolio-holding-pnl text-muted",
+                                )
+                                if drift_total
+                                else None
+                            ),
                         ],
                     ),
                 ],
@@ -1249,7 +1389,7 @@ def refresh_dashboard(_, trade_tab):
                 ],
             )
         )
-    if not primary_analytics["open_positions"]:
+    if not all_open_positions:
         holdings_list.append(html.Div("No active holdings", className="portfolio-empty"))
 
     realized_groups = {}
@@ -1383,6 +1523,26 @@ def refresh_dashboard(_, trade_tab):
         if shadow_has_history
         else ("Waiting for shadow fills" if shadow_mode_active else "Shadow tracking is disabled in live mode")
     )
+    execution_summary_label = "Shadow" if shadow_mode_active else "Live"
+    execution_cash_label = "Shadow Cash" if shadow_mode_active else "Live Cash"
+    entry_drift_value = (
+        f"{shadow_summary['avg_abs_price_delta_bps']:.1f}bps"
+        if shadow_has_history
+        else (f"{live_summary['avg_abs_price_delta_bps']:.1f}bps" if live_has_history else "-")
+    )
+    entry_drift_sub = (
+        f"{shadow_summary['total']} shadow fills | total entry drag {fmt_currency(abs(float(shadow_summary['total_execution_drag_usd'])))}"
+        if shadow_has_history
+        else (
+            f"{live_summary['total']} live intents | total entry drag {fmt_currency(abs(float(live_summary['total_execution_drag_usd'])))}"
+            if live_has_history
+            else (
+                "Shadow fills will appear after the next copied trade"
+                if shadow_mode_active
+                else "Live entry drift will appear after the next live order intent"
+            )
+        )
+    )
     shadow_focus_panel = html.Div(
         className="compare-stack",
         children=[
@@ -1392,7 +1552,7 @@ def refresh_dashboard(_, trade_tab):
                     html.Div(
                         className="compare-metric",
                         children=[
-                            html.Div("Shadow Net", className="realized-metric-label"),
+                            html.Div(f"{execution_summary_label} Net", className="realized-metric-label"),
                             html.Div(shadow_net_display, className="realized-metric-value"),
                             html.Div(shadow_positions_sub, className="realized-metric-sub"),
                         ],
@@ -1400,7 +1560,7 @@ def refresh_dashboard(_, trade_tab):
                     html.Div(
                         className="compare-metric",
                         children=[
-                            html.Div("Shadow Cash", className="realized-metric-label"),
+                            html.Div(execution_cash_label, className="realized-metric-label"),
                             html.Div(fmt_currency(primary_portfolio["cash_balance"]), className="realized-metric-value"),
                             html.Div("Estimated deployable cash", className="realized-metric-sub"),
                         ],
@@ -1417,18 +1577,8 @@ def refresh_dashboard(_, trade_tab):
                         className="compare-metric",
                         children=[
                             html.Div("Avg Entry Drift", className="realized-metric-label"),
-                            html.Div(
-                                f"{shadow_summary['avg_abs_price_delta_bps']:.1f}bps" if shadow_has_history else "-",
-                                className="realized-metric-value",
-                            ),
-                            html.Div(
-                                (
-                                    f"{shadow_summary['total']} shadow fills | total entry drag {fmt_currency(abs(float(shadow_summary['total_execution_drag_usd'])))}"
-                                    if shadow_has_history
-                                    else "Shadow fills will appear after the next copied trade"
-                                ),
-                                className="realized-metric-sub",
-                            ),
+                            html.Div(entry_drift_value, className="realized-metric-value"),
+                            html.Div(entry_drift_sub, className="realized-metric-sub"),
                         ],
                     ),
                 ],
@@ -1528,7 +1678,7 @@ def refresh_dashboard(_, trade_tab):
         execution_card_value,
         execution_card_sub,
         str(len(pending)),
-        f"{len(shadow_orders)} recent shadow fills" if shadow_mode_active else f"{len(copy_orders)} total copied orders",
+        f"{len(shadow_orders)} recent shadow fills" if shadow_mode_active else f"{len(live_orders)} recent live intents",
         fmt_currency(net_liquidation_value),
         (
             f"{primary_portfolio['positions_count']} {primary_name} positions | {len(shadow_analytics['open_positions'])} shadow-marked"
