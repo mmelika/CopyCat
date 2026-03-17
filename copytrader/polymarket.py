@@ -115,6 +115,9 @@ class PolymarketClient:
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": USER_AGENT})
+        self._profile_cache: dict[str, dict] = {}
+        self._market_metadata_cache: dict[str, dict] = {}
+        self._fee_rate_cache: dict[str, float] = {}
 
     def _get_json(self, url: str, params: dict | None = None):
         response = self.session.get(url, params=params, timeout=API_TIMEOUT_SECONDS)
@@ -130,8 +133,13 @@ class PolymarketClient:
         clean = (handle_or_wallet or "").strip().lstrip("@")
         if not clean:
             return {"handle": "", "wallet": ""}
+        cached = self._profile_cache.get(clean.lower())
+        if cached:
+            return dict(cached)
         if _wallet_like(clean):
-            return {"handle": clean, "wallet": clean}
+            result = {"handle": clean, "wallet": clean}
+            self._profile_cache[clean.lower()] = dict(result)
+            return result
 
         candidates = [
             ("https://gamma-api.polymarket.com/profiles", {"handle": clean}),
@@ -146,10 +154,13 @@ class PolymarketClient:
                 continue
             profile = self._extract_profile(payload)
             if profile.get("wallet"):
-                return {"handle": profile.get("handle") or clean, "wallet": profile["wallet"]}
+                result = {"handle": profile.get("handle") or clean, "wallet": profile["wallet"]}
+                self._profile_cache[clean.lower()] = dict(result)
+                return result
 
         profile = self._resolve_from_profile_page(clean)
         if profile.get("wallet"):
+            self._profile_cache[clean.lower()] = dict(profile)
             return profile
 
         raise RuntimeError(f"Could not resolve Polymarket profile for {clean}")
@@ -276,6 +287,9 @@ class PolymarketClient:
         clean_slug = (slug or "").strip()
         if not clean_slug:
             return {}
+        cached = self._market_metadata_cache.get(clean_slug)
+        if cached:
+            return dict(cached)
         try:
             payload = self._get_json("https://gamma-api.polymarket.com/markets", params={"slug": clean_slug})
         except Exception:
@@ -286,7 +300,7 @@ class PolymarketClient:
         item = items[0] if isinstance(items[0], dict) else {}
         if not item:
             return {}
-        return {
+        result = {
             "market_slug": item.get("slug") or clean_slug,
             "category": (item.get("category") or "").strip(),
             "market_type": (item.get("marketType") or "").strip(),
@@ -295,18 +309,24 @@ class PolymarketClient:
             "maker_base_fee": _to_float(item.get("makerBaseFee"), 0.0),
             "taker_base_fee": _to_float(item.get("takerBaseFee"), 0.0),
         }
+        self._market_metadata_cache[clean_slug] = dict(result)
+        return result
 
     def fetch_fee_rate_bps(self, token_id: str) -> float:
         clean_token_id = _clean_id(token_id)
         if not clean_token_id:
             return 0.0
+        if clean_token_id in self._fee_rate_cache:
+            return float(self._fee_rate_cache[clean_token_id])
         try:
             payload = self._get_json("https://clob.polymarket.com/fee-rate", params={"token_id": clean_token_id})
         except Exception:
             return 0.0
         if not isinstance(payload, dict):
             return 0.0
-        return _to_float(payload.get("fee_rate_bps"), 0.0)
+        fee_rate = _to_float(payload.get("fee_rate_bps"), 0.0)
+        self._fee_rate_cache[clean_token_id] = fee_rate
+        return fee_rate
 
     def fetch_order_book(self, token_id: str) -> dict:
         clean_token_id = _clean_id(token_id)

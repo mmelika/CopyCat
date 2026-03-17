@@ -7,6 +7,7 @@ import threading
 import time
 import uuid
 import math
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
@@ -1066,9 +1067,27 @@ class CopyTradingEngine:
         failed = 0
         message = "Sync complete."
         live_cash_balance_override = None
+        stage_timings: list[dict] = []
+
+        @contextmanager
+        def stage(name: str, **details):
+            stage_started = time.perf_counter()
+            try:
+                yield
+            finally:
+                duration_ms = int((time.perf_counter() - stage_started) * 1000)
+                stage_details = {key: value for key, value in details.items() if value is not None}
+                stage_timings.append(
+                    {
+                        "stage_name": name,
+                        "duration_ms": duration_ms,
+                        "details": stage_details,
+                    }
+                )
         try:
             if self._execution_mode(settings) == "live":
-                live_snapshot = self.live_broker.refresh_account_snapshot(settings, self.db_path)
+                with stage("live_account_snapshot"):
+                    live_snapshot = self.live_broker.refresh_account_snapshot(settings, self.db_path)
                 self._sync_live_cash_balance(live_snapshot)
                 live_cash_balance_override = round(max(float(live_snapshot.get("cash_balance") or 0.0), 0.0), 2)
                 snapshot_error = str(live_snapshot.get("error") or "").strip()
@@ -1088,110 +1107,146 @@ class CopyTradingEngine:
                     )
                     raise RuntimeError(pause_reason)
             target = settings["target_wallet"] or settings["target_handle"]
-            profile = self.client.resolve_target_wallet(target)
+            with stage("resolve_target_wallet", target=target):
+                profile = self.client.resolve_target_wallet(target)
             previous_local_positions = database.get_local_positions(self.db_path)
             trade_fetch_limit = max(1, min(int(settings["trade_fetch_limit"]), MAX_TRADE_FETCH_LIMIT))
-            trades = self.client.fetch_trades(profile["wallet"], handle=profile["handle"], limit=trade_fetch_limit)
-            positions = self.client.fetch_positions(profile["wallet"], limit=SOURCE_POSITION_FETCH_LIMIT)
-            leader_wallet_value = self._get_leader_wallet_value(settings, profile["wallet"], positions)
-            bootstrap_copied = self._bootstrap_current_source_positions(
-                settings,
-                app_state,
-                profile,
-                positions,
-                leader_wallet_value,
-            )
+            with stage("fetch_source_trades", wallet=profile["wallet"], limit=trade_fetch_limit):
+                trades = self.client.fetch_trades(profile["wallet"], handle=profile["handle"], limit=trade_fetch_limit)
+            with stage("fetch_source_positions", wallet=profile["wallet"], limit=SOURCE_POSITION_FETCH_LIMIT):
+                positions = self.client.fetch_positions(profile["wallet"], limit=SOURCE_POSITION_FETCH_LIMIT)
+            with stage("compute_leader_wallet_value"):
+                leader_wallet_value = self._get_leader_wallet_value(settings, profile["wallet"], positions)
+            with stage("bootstrap_current_positions"):
+                bootstrap_copied = self._bootstrap_current_source_positions(
+                    settings,
+                    app_state,
+                    profile,
+                    positions,
+                    leader_wallet_value,
+                )
             previous_positions = {
                 row["position_key"]: row
                 for row in database.list_source_positions(1000, self.db_path)
             }
             synthetic_sell_trades = []
             if self._position_delta_sells_enabled(settings):
-                synthetic_sell_trades = self._build_position_reduction_sells(
-                    previous_positions,
-                    positions,
-                    trades,
-                    profile["wallet"],
-                    profile["handle"],
-                )
-            database.replace_source_positions(positions, self.db_path)
-            database.refresh_local_position_market_values(self.db_path, source_positions=positions)
+                with stage("build_synthetic_position_delta_sells", previous_positions=len(previous_positions)):
+                    synthetic_sell_trades = self._build_position_reduction_sells(
+                        previous_positions,
+                        positions,
+                        trades,
+                        profile["wallet"],
+                        profile["handle"],
+                    )
+            with stage("replace_source_positions", positions=len(positions)):
+                database.replace_source_positions(positions, self.db_path)
+            with stage("refresh_local_market_values"):
+                database.refresh_local_position_market_values(self.db_path, source_positions=positions)
             trades_seen = len(trades)
             all_seen_trades = trades + synthetic_sell_trades
-            trade_ids = [trade["source_trade_id"] for trade in all_seen_trades]
-            existing_trade_ids = database.get_existing_source_trade_ids(trade_ids, self.db_path)
-            fresh_trades = [trade for trade in all_seen_trades if trade["source_trade_id"] not in existing_trade_ids]
-            eligible_fresh_trades, prestart_trades = self._split_by_copy_start(fresh_trades, app_state.get("copy_start_at", ""))
+            with stage("classify_seen_trades", trades_seen=len(all_seen_trades)):
+                trade_ids = [trade["source_trade_id"] for trade in all_seen_trades]
+                existing_trade_ids = database.get_existing_source_trade_ids(trade_ids, self.db_path)
+                fresh_trades = [trade for trade in all_seen_trades if trade["source_trade_id"] not in existing_trade_ids]
+                eligible_fresh_trades, prestart_trades = self._split_by_copy_start(fresh_trades, app_state.get("copy_start_at", ""))
             new_trades = len(fresh_trades)
+            fresh_trade_ages_ms = self._trade_age_metrics(eligible_fresh_trades, reference_time=self._last_tick_started_at)
+            if fresh_trade_ages_ms["count"]:
+                stage_timings.append(
+                    {
+                        "stage_name": "fresh_trade_detection_lag",
+                        "duration_ms": fresh_trade_ages_ms["max_age_ms"],
+                        "details": fresh_trade_ages_ms,
+                    }
+                )
 
-            copied, failed = self._copy_trades_first(
-                sorted(eligible_fresh_trades, key=lambda item: item["created_at"], reverse=True),
-                settings,
-                leader_wallet_value,
-                positions,
-                cash_balance_override=live_cash_balance_override,
-            )
-            database.upsert_source_trades(all_seen_trades, self.db_path)
-            self._finalize_fresh_trade_records(eligible_fresh_trades)
-            self._mark_prestart_trades(prestart_trades, app_state.get("copy_start_at", ""))
-            backlog_copied, backlog_failed = self._copy_pending(
-                settings,
-                leader_wallet_value,
-                app_state.get("copy_start_at", ""),
-                positions,
-                cash_balance_override=live_cash_balance_override,
-            )
+            with stage("copy_fresh_trades", eligible_fresh_trades=len(eligible_fresh_trades)):
+                copied, failed = self._copy_trades_first(
+                    sorted(eligible_fresh_trades, key=lambda item: item["created_at"], reverse=True),
+                    settings,
+                    leader_wallet_value,
+                    positions,
+                    cash_balance_override=live_cash_balance_override,
+                )
+            with stage("persist_source_trades", source_trades=len(all_seen_trades)):
+                database.upsert_source_trades(all_seen_trades, self.db_path)
+            with stage("finalize_fresh_trade_records"):
+                self._finalize_fresh_trade_records(eligible_fresh_trades)
+            with stage("mark_prestart_trades", prestart_trades=len(prestart_trades)):
+                self._mark_prestart_trades(prestart_trades, app_state.get("copy_start_at", ""))
+            with stage("copy_pending_trades"):
+                backlog_copied, backlog_failed = self._copy_pending(
+                    settings,
+                    leader_wallet_value,
+                    app_state.get("copy_start_at", ""),
+                    positions,
+                    cash_balance_override=live_cash_balance_override,
+                )
             copied += backlog_copied
             failed += backlog_failed
             copied += bootstrap_copied
-            database.refresh_local_position_market_values(self.db_path, freeze_recent_seconds=FRESH_FILL_MARK_GRACE_SECONDS, source_positions=positions)
+            with stage("refresh_local_market_values_frozen", freeze_recent_seconds=FRESH_FILL_MARK_GRACE_SECONDS):
+                database.refresh_local_position_market_values(self.db_path, freeze_recent_seconds=FRESH_FILL_MARK_GRACE_SECONDS, source_positions=positions)
             if self._autonomous_sells_enabled(settings):
-                resolved_exits = self._reconcile_resolved_positions(settings)
+                with stage("reconcile_resolved_positions"):
+                    resolved_exits = self._reconcile_resolved_positions(settings)
                 copied += resolved_exits
                 if resolved_exits:
-                    database.refresh_local_position_market_values(self.db_path, source_positions=positions)
-                shadow_resolved_exits = self._reconcile_resolved_shadow_positions(settings)
+                    with stage("refresh_local_market_values_after_resolved"):
+                        database.refresh_local_position_market_values(self.db_path, source_positions=positions)
+                with stage("reconcile_resolved_shadow_positions"):
+                    shadow_resolved_exits = self._reconcile_resolved_shadow_positions(settings)
                 copied += shadow_resolved_exits
-                auto_zero_value_exits = self._liquidate_zero_value_positions(settings, positions)
+                with stage("liquidate_zero_value_positions"):
+                    auto_zero_value_exits = self._liquidate_zero_value_positions(settings, positions)
                 copied += auto_zero_value_exits
                 if auto_zero_value_exits:
-                    database.refresh_local_position_market_values(self.db_path, source_positions=positions)
-                milestone_liquidations = self._liquidate_positions_at_growth_milestone(settings, positions)
+                    with stage("refresh_local_market_values_after_zero_value"):
+                        database.refresh_local_position_market_values(self.db_path, source_positions=positions)
+                with stage("liquidate_growth_milestone_positions"):
+                    milestone_liquidations = self._liquidate_positions_at_growth_milestone(settings, positions)
                 copied += milestone_liquidations
                 if milestone_liquidations:
-                    database.refresh_local_position_market_values(self.db_path, source_positions=positions)
-                auto_liquidated = self._liquidate_fully_priced_positions(settings, positions)
+                    with stage("refresh_local_market_values_after_growth"):
+                        database.refresh_local_position_market_values(self.db_path, source_positions=positions)
+                with stage("liquidate_fully_priced_positions"):
+                    auto_liquidated = self._liquidate_fully_priced_positions(settings, positions)
                 copied += auto_liquidated
                 if auto_liquidated:
-                    database.refresh_local_position_market_values(self.db_path, source_positions=positions)
-            reconciliation_mismatches = self._reconcile_source_sells(
-                settings=settings,
-                previous_local_positions=previous_local_positions,
-                current_local_positions=database.get_local_positions(self.db_path),
-                source_sell_trades=all_seen_trades,
-                source_positions=positions,
-                copy_start_at=app_state.get("copy_start_at", ""),
-            )
-            portfolio = database.portfolio_totals(self.db_path, positions)
-            database.snapshot_portfolio(
-                portfolio["cash_balance"],
-                portfolio["gross_exposure"],
-                portfolio["net_value"],
-                portfolio["positions_count"],
-                self.db_path,
-            )
-            shadow_portfolio = database.shadow_portfolio_totals(self.db_path, positions)
-            database.snapshot_shadow_portfolio(
-                shadow_portfolio["cash_balance"],
-                shadow_portfolio["gross_exposure"],
-                shadow_portfolio["net_value"],
-                shadow_portfolio["positions_count"],
-                self.db_path,
-            )
-            database.set_app_state("resolved_target_wallet", profile["wallet"], self.db_path)
-            database.set_app_state("leader_wallet_value", f"{leader_wallet_value:.8f}", self.db_path)
-            database.set_app_state("leader_wallet_updated_at", database.utc_now(), self.db_path)
-            database.set_app_state("last_sync_at", database.utc_now(), self.db_path)
+                    with stage("refresh_local_market_values_after_full_price"):
+                        database.refresh_local_position_market_values(self.db_path, source_positions=positions)
+            with stage("reconcile_source_sells"):
+                reconciliation_mismatches = self._reconcile_source_sells(
+                    settings=settings,
+                    previous_local_positions=previous_local_positions,
+                    current_local_positions=database.get_local_positions(self.db_path),
+                    source_sell_trades=all_seen_trades,
+                    source_positions=positions,
+                    copy_start_at=app_state.get("copy_start_at", ""),
+                )
+            with stage("snapshot_portfolios"):
+                portfolio = database.portfolio_totals(self.db_path, positions)
+                database.snapshot_portfolio(
+                    portfolio["cash_balance"],
+                    portfolio["gross_exposure"],
+                    portfolio["net_value"],
+                    portfolio["positions_count"],
+                    self.db_path,
+                )
+                shadow_portfolio = database.shadow_portfolio_totals(self.db_path, positions)
+                database.snapshot_shadow_portfolio(
+                    shadow_portfolio["cash_balance"],
+                    shadow_portfolio["gross_exposure"],
+                    shadow_portfolio["net_value"],
+                    shadow_portfolio["positions_count"],
+                    self.db_path,
+                )
+            with stage("update_app_state"):
+                database.set_app_state("resolved_target_wallet", profile["wallet"], self.db_path)
+                database.set_app_state("leader_wallet_value", f"{leader_wallet_value:.8f}", self.db_path)
+                database.set_app_state("leader_wallet_updated_at", database.utc_now(), self.db_path)
+                database.set_app_state("last_sync_at", database.utc_now(), self.db_path)
             status_note = f"Synced {trades_seen} source trades, copied {copied}."
             if reconciliation_mismatches:
                 status_note = f"{status_note} Sell mismatches: {reconciliation_mismatches}."
@@ -1211,6 +1266,7 @@ class CopyTradingEngine:
             database.log("ERROR", "sync", "Sync run failed.", {"error": message}, self.db_path)
 
         latency_ms = int((time.perf_counter() - started) * 1000)
+        timing_summary = self._summarize_stage_timings(stage_timings, latency_ms)
         database.finish_sync_run(
             run_id,
             status=status,
@@ -1222,9 +1278,53 @@ class CopyTradingEngine:
             message=message,
             db_path=self.db_path,
         )
+        for row in stage_timings:
+            database.insert_sync_run_stage(
+                run_id,
+                stage_name=row["stage_name"],
+                duration_ms=row["duration_ms"],
+                details=row["details"],
+                db_path=self.db_path,
+            )
+        database.log("INFO", "timing", "Sync timing breakdown recorded.", timing_summary, self.db_path)
         self._last_tick_finished_at = database.utc_now()
         self._last_tick_status = status.lower()
         return {"status": status, "message": message, "latency_ms": latency_ms}
+
+    def _trade_age_metrics(self, trades: list[dict], *, reference_time: str) -> dict:
+        reference_ts = _parse_iso(reference_time)
+        age_ms: list[int] = []
+        for trade in trades:
+            created_at = _parse_iso(trade.get("created_at") or "")
+            if not reference_ts or not created_at:
+                continue
+            age_ms.append(max(int((reference_ts - created_at).total_seconds() * 1000), 0))
+        if not age_ms:
+            return {"count": 0, "min_age_ms": 0, "avg_age_ms": 0, "max_age_ms": 0}
+        return {
+            "count": len(age_ms),
+            "min_age_ms": min(age_ms),
+            "avg_age_ms": int(sum(age_ms) / len(age_ms)),
+            "max_age_ms": max(age_ms),
+        }
+
+    def _summarize_stage_timings(self, stage_timings: list[dict], total_latency_ms: int) -> dict:
+        sorted_stages = sorted(stage_timings, key=lambda row: row["duration_ms"], reverse=True)
+        top_stages = [
+            {
+                "stage_name": row["stage_name"],
+                "duration_ms": row["duration_ms"],
+                "details": row.get("details") or {},
+            }
+            for row in sorted_stages[:5]
+        ]
+        detection_lag = next((row for row in stage_timings if row["stage_name"] == "fresh_trade_detection_lag"), None)
+        return {
+            "total_latency_ms": total_latency_ms,
+            "stages_recorded": len(stage_timings),
+            "top_stages": top_stages,
+            "fresh_trade_detection_lag": (detection_lag or {}).get("details") or {},
+        }
 
     def health(self) -> dict:
         app_state = database.get_app_state(self.db_path)

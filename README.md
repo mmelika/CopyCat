@@ -31,6 +31,8 @@ If you are searching GitHub for a `Polymarket trading bot`, `Polymarket copy bot
 - `Optional autonomous exits`: resolved losers can be swept to zero, nearly fully priced winners can auto-exit above 98c, and growth-milestone liquidation can run only when you enable autonomous sell rules.
 - `Manual controls`: pause, force sync, fresh start, liquidate-all, and per-position sell buttons are available from the dashboard.
 - `Audit tooling`: `/healthz`, `/audit/profit`, `/audit/shadow`, `/audit/shadow/closed`, and `/audit/reconcile` help verify the bot's state.
+- `Per-sync timing breakdown`: each sync now records stage-by-stage timings in SQLite so you can separate engine work from upstream Polymarket detection lag.
+- `Faster sync hot paths`: portfolio and mark-to-market updates now use the maintained `local_positions` ledger directly instead of replaying the full order history on every sync.
 - `Safer SQLite concurrency`: WAL mode is initialized once instead of on every request, which reduces lock churn when the web app and sync engine share the same database.
 - `Live execution scaffold`: there is a guarded Polymarket CLOB order-intent path and live account reconciliation, but this should be treated as non-production.
 - `Live entry drift tracking`: live order intents now calculate entry drift from the live limit price versus the source/reference price, and the dashboard summarizes that drag alongside shadow drift.
@@ -165,6 +167,31 @@ python3 scripts/parity_replay_audit.py \
 The replay injects only the minimum cash needed to mirror source trade notional 1:1 and replays the full source history so sells have the same inventory context. By default it filters compare-table failures that only say the wallet already owned the shares, because those do not indicate a copy-logic mismatch.
 
 Persistence lives in [`data/copytrader.db`](data/copytrader.db).
+
+To inspect where sync time is being spent, query the latest timing stages:
+
+```bash
+sqlite3 data/copytrader.db "
+  SELECT stage_name, duration_ms, details
+  FROM sync_run_stages
+  WHERE run_id = (SELECT MAX(id) FROM sync_runs WHERE status != 'RUNNING')
+  ORDER BY duration_ms DESC;
+"
+```
+
+The `fresh_trade_detection_lag` row is especially important: it measures how old newly seen source trades already were when the engine first noticed them. That tells you how much delay came from Polymarket's activity/position APIs instead of this app's own sync loop.
+
+You can also inspect the summarized timing log rows:
+
+```bash
+sqlite3 data/copytrader.db "
+  SELECT ts, component, message, details
+  FROM logs
+  WHERE component = 'timing'
+  ORDER BY id DESC
+  LIMIT 5;
+"
+```
 
 ## Deploy
 

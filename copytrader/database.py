@@ -244,6 +244,16 @@ def init_db(db_path: Path | str = DB_PATH) -> None:
                 message TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS sync_run_stages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id INTEGER NOT NULL,
+                stage_name TEXT NOT NULL,
+                duration_ms INTEGER NOT NULL DEFAULT 0,
+                details TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(run_id) REFERENCES sync_runs(id)
+            );
+
             CREATE TABLE IF NOT EXISTS logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ts TEXT NOT NULL,
@@ -469,6 +479,45 @@ def list_sync_runs(limit: int = 20, db_path: Path | str = DB_PATH) -> list[dict]
             (limit,),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def insert_sync_run_stage(
+    run_id: int,
+    *,
+    stage_name: str,
+    duration_ms: int,
+    details=None,
+    db_path: Path | str = DB_PATH,
+) -> None:
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO sync_run_stages(run_id, stage_name, duration_ms, details, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (run_id, stage_name, int(duration_ms), _json(details) if details is not None else None, utc_now()),
+        )
+
+
+def list_sync_run_stages(run_id: int, db_path: Path | str = DB_PATH) -> list[dict]:
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM sync_run_stages
+            WHERE run_id=?
+            ORDER BY id ASC
+            """,
+            (run_id,),
+        ).fetchall()
+    items = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["details"] = json.loads(item.get("details") or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            item["details"] = {}
+        items.append(item)
+    return items
 
 
 def upsert_source_positions(positions: list[dict], db_path: Path | str = DB_PATH) -> None:
@@ -1130,11 +1179,10 @@ def latest_shadow_portfolio_snapshot_before(before_ts: str, db_path: Path | str 
 
 def portfolio_totals(db_path: Path | str = DB_PATH, source_positions: list[dict] | None = None) -> dict:
     settings = get_settings(db_path)
-    analytics = trade_analytics(db_path, source_positions=source_positions)
-    positions = analytics["open_positions"]
-    gross_exposure = round(sum(row["market_value"] for row in positions), 2)
+    positions = list_local_positions_marked(db_path, source_positions=source_positions)
+    gross_exposure = round(sum(float(row.get("market_value") or 0.0) for row in positions), 2)
     cash_balance = float(settings["paper_cash_balance"])
-    realized_pnl = round(sum(row["realized_pnl"] for row in positions), 2)
+    realized_pnl = round(sum(float(row.get("realized_pnl") or 0.0) for row in positions), 2)
     net_value = round(cash_balance + gross_exposure, 2)
     starting_balance = float(settings["paper_starting_balance"])
     total_gain = round(net_value - starting_balance, 2)
@@ -1256,22 +1304,32 @@ def _resolve_mark_price(record: dict, price_map: dict[tuple[str, str], float], a
 
 
 def list_local_positions_marked(db_path: Path | str = DB_PATH, freeze_recent_seconds: int = 0, source_positions: list[dict] | None = None) -> list[dict]:
-    positions = [dict(row) for row in trade_analytics(db_path, source_positions=source_positions)["open_positions"]]
+    positions = [dict(row) for row in get_local_positions(db_path)]
+    if not positions:
+        return []
+
+    effective_source_positions = list(source_positions or [])
+    if not effective_source_positions:
+        effective_source_positions = list_source_positions(1000, db_path)
+    price_map, alias_price_map = _price_maps_from_positions(effective_source_positions)
     freeze_cutoff = datetime.now(timezone.utc) - timedelta(seconds=max(int(freeze_recent_seconds), 0))
     marked = []
     for row in positions:
         shares = float(row.get("shares") or 0.0)
         avg_price = float(row.get("avg_price") or 0.0)
+        cost_basis = round(shares * avg_price, 2)
         updated_at = _parse_utc(row.get("updated_at") or "")
         if updated_at is not None and updated_at >= freeze_cutoff:
             current_price = avg_price
-            market_value = round(shares * current_price, 2)
-            unrealized_pnl = round(market_value - float(row.get("cost_basis") or 0.0), 2)
-            row["current_price"] = round(current_price, 4)
-            row["market_value"] = market_value
-            row["unrealized_pnl"] = unrealized_pnl
         else:
-            row["cost_basis"] = round(float(row.get("cost_basis") or 0.0), 2)
+            fallback_price = avg_price
+            current_price = _resolve_mark_price(row, price_map, alias_price_map, fallback_price)
+        market_value = round(shares * current_price, 2)
+        unrealized_pnl = round(market_value - cost_basis, 2)
+        row["cost_basis"] = cost_basis
+        row["current_price"] = round(current_price, 4)
+        row["market_value"] = market_value
+        row["unrealized_pnl"] = unrealized_pnl
         marked_row = dict(row)
         marked.append(marked_row)
     marked.sort(key=lambda row: (row["market_value"], row["updated_at"]), reverse=True)
