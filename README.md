@@ -36,7 +36,7 @@ If you are searching GitHub for a `Polymarket trading bot`, `Polymarket copy bot
 - `Safer SQLite concurrency`: WAL mode is initialized once instead of on every request, which reduces lock churn when the web app and sync engine share the same database.
 - `Live execution scaffold`: there is a guarded Polymarket CLOB order-intent path and live account reconciliation, but this should be treated as non-production.
 - `Live entry drift tracking`: live order intents now calculate entry drift from the live limit price versus the source/reference price, and the dashboard summarizes that drag alongside shadow drift.
-- `Per-position drift visibility`: the Active Holdings rows now show drift per position, including average entry drift in bps and cumulative drag for that holding.
+- `Per-position drift visibility`: the Active Holdings rows now show drift per position, including average entry drift in bps and cumulative drag in USD for that holding.
 
 ## What This Repo Is Not
 
@@ -60,7 +60,7 @@ The local UI is built for operating a Polymarket shadow trading bot in real time
 - top-bar runtime status, heartbeat, execution mode, and control buttons
 - shadow portfolio breakdown and realized performance
 - 1D, 1W, 1M, and all-time portfolio curves
-- active holdings rows with per-position drift details
+- active holdings rows with per-position drift details in both bps and USD
 - open-position and closed-trade views with a per-position sell button on open rows
 - target trade feed and copied-order history
 - sell-match auditing and reconciliation visibility

@@ -1312,8 +1312,9 @@ def refresh_dashboard(_, trade_tab):
         live_mode_holding = not shadow_mode_active
         drift = (live_position_drift_by_key if live_mode_holding else shadow_position_drift_by_key).get(row["position_key"], {})
         drift_total = int(drift.get("total") or 0)
+        drift_usd = abs(float(drift.get("total_execution_drag_usd") or 0.0))
         drift_subtitle = (
-            f" | drift {float(drift.get('avg_abs_price_delta_bps') or 0.0):.1f}bps over {drift_total} fill{'s' if drift_total != 1 else ''}"
+            f" | drift {float(drift.get('avg_abs_price_delta_bps') or 0.0):.1f}bps / {fmt_currency(drift_usd)} over {drift_total} fill{'s' if drift_total != 1 else ''}"
             if drift_total
             else ""
         )
@@ -1350,14 +1351,6 @@ def refresh_dashboard(_, trade_tab):
                                     fmt_signed_currency(row["unrealized_pnl"]),
                                     className=f"portfolio-holding-pnl {signed_class(row['unrealized_pnl'])}",
                                 )
-                            ),
-                            (
-                                html.Div(
-                                    f"drag {fmt_currency(abs(float(drift.get('total_execution_drag_usd') or 0.0)))}",
-                                    className="portfolio-holding-pnl text-muted",
-                                )
-                                if drift_total
-                                else None
                             ),
                         ],
                     ),
