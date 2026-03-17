@@ -333,6 +333,11 @@ def fmt_signed_currency(value) -> str:
     return f"{'+' if amount > 0 else ''}${amount:,.2f}"
 
 
+def fmt_signed_percent(value) -> str:
+    amount = float(value)
+    return f"{'+' if amount > 0 else ''}{amount:.2f}%"
+
+
 def signed_class(value) -> str:
     amount = float(value or 0)
     if amount > 0:
@@ -872,8 +877,14 @@ def live_snapshot_positions(snapshot: dict | None) -> list[dict]:
         shares = float(item.get("shares") or 0.0)
         market_value = round(float(item.get("notional_usd") or 0.0), 2)
         current_price = round(float(item.get("price") or 0.0), 3)
+        avg_price = round(float(item.get("avg_price") or 0.0), 3)
+        cost_basis = round(float(item.get("cost_basis") or 0.0), 2)
         if shares <= 0 or market_value <= 0:
             continue
+        if cost_basis <= 0 and avg_price > 0 and shares > 0:
+            cost_basis = round(avg_price * shares, 2)
+        unrealized_pnl = round(market_value - cost_basis, 2) if cost_basis > 0 else 0.0
+        unrealized_pct = round((unrealized_pnl / cost_basis) * 100, 2) if cost_basis > 0 else 0.0
         positions.append(
             {
                 "position_key": item.get("position_key") or f"{item.get('market_slug') or ''}:{item.get('outcome') or ''}",
@@ -881,8 +892,12 @@ def live_snapshot_positions(snapshot: dict | None) -> list[dict]:
                 "market_title": item.get("market_title") or item.get("market_slug") or "Unknown market",
                 "outcome": item.get("outcome") or "UNKNOWN",
                 "shares": shares,
+                "avg_price": avg_price,
+                "cost_basis": cost_basis,
                 "market_value": market_value,
                 "current_price": current_price,
+                "unrealized_pnl": unrealized_pnl,
+                "unrealized_pct": unrealized_pct,
                 "updated_at": item.get("updated_at") or "",
             }
         )
@@ -1249,6 +1264,30 @@ def refresh_dashboard(_, trade_tab):
         ]
         for row in primary_analytics["open_trades"][:40]
     ] or [["No open trades", "-", "-", "-", "-", "-", "-", "-", "-", "-"]]
+    live_open_trade_rows = [
+        [
+            fmt_pacific_time(row.get("updated_at") or ""),
+            market_link(row["market_title"], row["market_slug"], 30),
+            row["outcome"],
+            fmt_number(row["shares"], 2),
+            fmt_number(row.get("avg_price") or 0.0, 3) if float(row.get("avg_price") or 0.0) > 0 else "-",
+            fmt_currency(row.get("cost_basis") or 0.0) if float(row.get("cost_basis") or 0.0) > 0 else "-",
+            fmt_number(row["current_price"], 3),
+            fmt_currency(row["market_value"]),
+            (
+                f"{fmt_signed_currency(row.get('unrealized_pnl') or 0.0)} ({fmt_signed_percent(row.get('unrealized_pct') or 0.0)})"
+                if float(row.get("cost_basis") or 0.0) > 0
+                else "-"
+            ),
+            html.Button(
+                "Sell",
+                id={"type": "sell-position-btn", "position_key": row["position_key"]},
+                className="btn-danger position-sell-btn",
+                n_clicks=0,
+            ),
+        ]
+        for row in live_snapshot_open_positions[:40]
+    ] or [["No open positions", "-", "-", "-", "-", "-", "-", "-", "-", "-"]]
     closed_trade_rows = [
         [
             fmt_pacific_time(row["entry_time"]),
@@ -1265,11 +1304,17 @@ def refresh_dashboard(_, trade_tab):
         for row in primary_analytics["closed_trades"][:40]
     ] or [["No closed trades", "-", "-", "-", "-", "-", "-", "-", "-", "-"]]
     trade_book_table = (
-        render_table(["Bought At (PT)", "Market", "Outcome", "Shares", "Buy Px", "Cost", "Mark Px", "Value", "P/L", "Sell"], open_trade_rows)
+        render_table(
+            ["Bought At (PT)", "Market", "Outcome", "Shares", "Buy Px", "Cost", "Mark Px", "Value", "P/L", "Sell"],
+            live_open_trade_rows if not shadow_mode_active else open_trade_rows,
+        )
         if trade_tab == "open-trades"
         else render_table(["Bought At (PT)", "Sold At (PT)", "Market", "Outcome", "Shares", "Buy Px", "Sell Px", "Cost", "Proceeds", "P/L"], closed_trade_rows)
     )
-    trade_book_count = len(primary_analytics["open_trades"]) if trade_tab == "open-trades" else len(primary_analytics["closed_trades"])
+    if trade_tab == "open-trades":
+        trade_book_count = len(live_snapshot_open_positions) if not shadow_mode_active else len(primary_analytics["open_trades"])
+    else:
+        trade_book_count = len(primary_analytics["closed_trades"])
     net_value = max(float(primary_portfolio["net_value"]), 0.01)
     cash_pct = round((float(primary_portfolio["cash_balance"]) / net_value) * 100, 1) if net_value else 0.0
     holdings_pct = round((float(primary_portfolio["gross_exposure"]) / net_value) * 100, 1) if net_value else 0.0
@@ -1318,6 +1363,19 @@ def refresh_dashboard(_, trade_tab):
             if drift_total
             else ""
         )
+        unrealized_pnl = float(row.get("unrealized_pnl") or 0.0)
+        cost_basis = float(row.get("cost_basis") or 0.0)
+        unrealized_pct = (
+            float(row.get("unrealized_pct") or 0.0)
+            if row.get("unrealized_pct") is not None
+            else round((unrealized_pnl / cost_basis) * 100, 2) if cost_basis > 0 else 0.0
+        )
+        direction_word = "up" if unrealized_pnl > 0 else "down" if unrealized_pnl < 0 else "flat"
+        pnl_detail = (
+            f"{direction_word} {fmt_signed_currency(unrealized_pnl)} ({fmt_signed_percent(unrealized_pct)})"
+            if cost_basis > 0
+            else f"{fmt_number(row['shares'], 2)} sh"
+        )
         holdings_list.append(
             html.Div(
                 className="portfolio-holding-row",
@@ -1328,7 +1386,13 @@ def refresh_dashboard(_, trade_tab):
                             market_link(row["market_title"], row["market_slug"], 42),
                             html.Div(
                                 (
-                                    f"{row['outcome']} | {fmt_number(row['shares'], 2)} shares @ mark {fmt_number(row['current_price'], 3)}{drift_subtitle}"
+                                    f"{row['outcome']} | {fmt_number(row['shares'], 2)} shares @ mark {fmt_number(row['current_price'], 3)}"
+                                    + (
+                                        f" vs avg {fmt_number(row.get('avg_price') or 0.0, 3)}"
+                                        if float(row.get("avg_price") or 0.0) > 0
+                                        else ""
+                                    )
+                                    + drift_subtitle
                                     if live_mode_holding
                                     else f"{row['outcome']} | spent {fmt_currency(row['cost_basis'])} @ avg {fmt_number(row['avg_price'], 3)}{drift_subtitle}"
                                 ),
@@ -1341,16 +1405,9 @@ def refresh_dashboard(_, trade_tab):
                         children=[
                             html.Div(f"{allocation_pct:.1f}%", className="portfolio-holding-weight"),
                             html.Div(fmt_currency(row["market_value"]), className="portfolio-holding-amount"),
-                            (
-                                html.Div(
-                                    f"{fmt_number(row['shares'], 2)} sh",
-                                    className="portfolio-holding-pnl text-muted",
-                                )
-                                if live_mode_holding
-                                else html.Div(
-                                    fmt_signed_currency(row["unrealized_pnl"]),
-                                    className=f"portfolio-holding-pnl {signed_class(row['unrealized_pnl'])}",
-                                )
+                            html.Div(
+                                pnl_detail,
+                                className=f"portfolio-holding-pnl {signed_class(unrealized_pnl) if cost_basis > 0 else 'text-muted'}",
                             ),
                         ],
                     ),

@@ -38,6 +38,8 @@ If you are searching GitHub for a `Polymarket trading bot`, `Polymarket copy bot
 - `Live execution scaffold`: there is a guarded Polymarket CLOB order-intent path and live account reconciliation, but this should be treated as non-production.
 - `Live entry drift tracking`: live order intents now calculate entry drift from the live limit price versus the source/reference price, and the dashboard summarizes that drag alongside shadow drift.
 - `Per-position drift visibility`: the Active Holdings rows now show drift per position, including average entry drift in bps and cumulative drag in USD for that holding.
+- `Per-position up/down visibility`: holdings rows now show per-position unrealized up/down in USD and percent when the app can recover cost basis from the position snapshot.
+- `Live trade book from live inventory`: in live mode, the open-position trade book now renders from the latest live wallet snapshot instead of the local copied-order ledger.
 - `Stepped live max order cap`: live buys respect a base `$25` max order cap, step up to `$45` once portfolio value reaches `$200`, step up to `$70` at `$300`, add another `$25` for each additional `$100` until the cap reaches `$250`, then hold that `$250` single-position cap from `$1,000` up to `$5,000` of portfolio value.
 - `High-conviction buy override`: when the leader buys more than `$1,000`, the live follower now uses its full allowed live max order size instead of the smaller proportional amount.
 
@@ -63,7 +65,7 @@ The local UI is built for operating a Polymarket shadow trading bot in real time
 - top-bar runtime status, heartbeat, execution mode, and control buttons
 - shadow portfolio breakdown and realized performance
 - 1D, 1W, 1M, and all-time portfolio curves
-- active holdings rows with per-position drift details in both bps and USD
+- active holdings rows with per-position drift details plus per-position unrealized up/down
 - open-position and closed-trade views with a per-position sell button on open rows
 - target trade feed and copied-order history
 - sell-match auditing and reconciliation visibility
@@ -128,6 +130,7 @@ The live dashboard cash snapshot normalizes CLOB collateral balances from raw ba
 If the live collateral call fails transiently but a recent successful snapshot exists, the app reuses that recent collateral balance instead of briefly overwriting the dashboard with zero.
 In live mode, the copy-decision path now uses that same live collateral snapshot directly for cash sizing, so the live engine can run independently with the same decision logic as shadow mode while sourcing cash from the live Polymarket account instead of a shadow balance setting. If the live collateral refresh fails, the live engine pauses itself rather than continuing with a stale or zeroed cash input.
 The live dashboard's Active Holdings panel now renders from the latest live account snapshot positions instead of the local copy-order ledger, so live holdings reflect the actual Polymarket wallet inventory the engine most recently fetched.
+When the live position payload includes entry-price or cost-basis fields, the dashboard now also shows each holding's unrealized up/down in USD and percent, and the live open-position trade book uses that same live inventory snapshot.
 If the live snapshot table is missing or unavailable, the dashboard falls back to the older local portfolio view instead of failing the whole page.
 
 Defaults are seeded from [`copytrader/config.py`](copytrader/config.py).
