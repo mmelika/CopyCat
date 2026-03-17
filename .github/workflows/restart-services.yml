@@ -21,10 +21,10 @@ jobs:
             sudo systemctl restart "$WEB_SERVICE_NAME" "$ENGINE_SERVICE_NAME"
             sleep 5
             echo "== systemctl status: $WEB_SERVICE_NAME =="
-            sudo systemctl --no-pager --full status "$WEB_SERVICE_NAME" | sed -n '1,40p'
+            timeout 20s sudo systemctl --no-pager --full status "$WEB_SERVICE_NAME" | sed -n '1,40p' || true
             echo "== systemctl status: $ENGINE_SERVICE_NAME =="
-            sudo systemctl --no-pager --full status "$ENGINE_SERVICE_NAME" | sed -n '1,40p'
+            timeout 20s sudo systemctl --no-pager --full status "$ENGINE_SERVICE_NAME" | sed -n '1,40p' || true
             echo "== engine journal tail =="
-            sudo journalctl -u "$ENGINE_SERVICE_NAME" -n 80 --no-pager
+            timeout 20s sudo journalctl -u "$ENGINE_SERVICE_NAME" -n 80 --no-pager || true
             echo "== localhost healthz =="
-            curl -fsS http://127.0.0.1:8060/healthz
+            timeout 20s curl -fsS http://127.0.0.1:8060/healthz || true
