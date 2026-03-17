@@ -76,9 +76,8 @@ def _position_aliases(record: dict) -> set[str]:
 
 @contextmanager
 def connect(db_path: Path | str = DB_PATH):
-    conn = sqlite3.connect(db_path, check_same_thread=False)
+    conn = sqlite3.connect(db_path, check_same_thread=False, timeout=5.0)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA busy_timeout=5000")
     try:
@@ -91,6 +90,8 @@ def connect(db_path: Path | str = DB_PATH):
 def init_db(db_path: Path | str = DB_PATH) -> None:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     with connect(db_path) as conn:
+        # WAL is persistent database state; setting it once avoids repeated write-lock churn on every request.
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS settings (

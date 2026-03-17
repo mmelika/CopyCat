@@ -30,6 +30,7 @@ If you are searching GitHub for a `Polymarket trading bot`, `Polymarket copy bot
 - `Optional autonomous exits`: resolved losers can be swept to zero, nearly fully priced winners can auto-exit above 98c, and growth-milestone liquidation can run only when you enable autonomous sell rules.
 - `Manual controls`: pause, force sync, fresh start, liquidate-all, and per-position sell buttons are available from the dashboard.
 - `Audit tooling`: `/healthz`, `/audit/profit`, `/audit/shadow`, `/audit/shadow/closed`, and `/audit/reconcile` help verify the bot's state.
+- `Safer SQLite concurrency`: WAL mode is initialized once instead of on every request, which reduces lock churn when the web app and sync engine share the same database.
 - `Live execution scaffold`: there is a guarded Polymarket CLOB order-intent path and live account reconciliation, but this should be treated as non-production.
 
 ## What This Repo Is Not
