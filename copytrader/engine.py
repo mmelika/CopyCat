@@ -345,21 +345,13 @@ def _copy_trade_size(
 
 def _bucketed_buy_targets(local_equity: float) -> tuple[float, float, float]:
     equity = max(float(local_equity or 0.0), 0.0)
-    if equity < 250:
-        return (10.0, 12.0, 20.0)
-    if equity < 500:
-        return (15.0, 20.0, 40.0)
-    if equity < 1000:
-        return (20.0, 28.0, 55.0)
-    if equity < 2000:
-        return (25.0, 36.0, 70.0)
-    if equity < 5000:
-        return (35.0, 50.0, 100.0)
-    increments = math.floor((equity - 5000) / 2500)
+    max_bucket = _round_up_to_cent(equity * 0.10)
+    mid_bucket = _round_up_to_cent(max_bucket * 0.50)
+    low_bucket = _round_up_to_cent(max_bucket * 0.375)
     return (
-        40.0 + (max(increments, 0) * 5.0),
-        60.0 + (max(increments, 0) * 10.0),
-        120.0 + (max(increments, 0) * 20.0),
+        max(low_bucket, MIN_FOLLOWER_BUY_USD),
+        max(mid_bucket, MIN_FOLLOWER_BUY_USD),
+        max(max_bucket, MIN_FOLLOWER_BUY_USD),
     )
 
 

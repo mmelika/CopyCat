@@ -21,7 +21,7 @@ If you are searching GitHub for a `Polymarket trading bot`, `Polymarket copy bot
 - `Cash-reserve aware execution`: buys are constrained by deployable cash, not the older exposure-cap logic.
 - `Minimum leader buy filter`: leader buys at `$40.00` or below are ignored, so copied buys only trigger when the source trade is greater than `$40.00`.
 - `Minimum follower buy size`: when a copied buy is eligible, the follower now allocates at least `$1.00` on that buy, subject to available cash and the rest of the existing guardrails.
-- `Leader-size buy buckets`: copied BUY sizing now uses bankroll-tiered buckets from the leader order size: below `$100`, `$100-$499`, and `$500+`, with stronger step-ups as bankroll grows.
+- `Leader-size buy buckets`: copied BUY sizing now works backward from a max single-buy target of `10%` of bankroll. Leader buys below `$100`, `$100-$499`, and `$500+` map to the low, mid, and max bucket respectively.
 - `Buy price ceiling`: the bot will not open or bootstrap a BUY position when the contract price is above `$0.90`.
 - `Live minimum order guard`: live BUY orders are now fail-closed below `$1.00`, including bootstrap/current-position buys, so the bot will not send sub-minimum marketable orders to Polymarket.
 - `Tiered position cap`: once follower equity is above `$2,000`, each position is capped at `$400`, and that cap increases by `$400` for each additional `$2,500` of equity.
@@ -103,7 +103,7 @@ Most runtime settings are editable from the dashboard:
 - copy-sells on or off
 - minimum copied leader buy size: source buys must be greater than `$40.00`
 - minimum follower copied buy size: eligible copied buys are floored at `$1.00`
-- copied buy buckets: under `$250` bankroll the targets are `$10 / $12 / $20`; at `$250` bankroll they step to `$15 / $20 / $40`; larger bankroll tiers continue increasing from there
+- copied buy buckets: the max bucket is `10%` of bankroll, the mid bucket is `50%` of that max, and the low bucket is `37.5%` of that max
 - copied buy price ceiling: buys are skipped when the contract price is above `$0.90`
 - explicit leader sells only or optional inferred position-delta sells
 - leader-only sells or optional autonomous exit rules
@@ -119,7 +119,7 @@ In live mode, `live_max_order_usd` is now the floor for the live order cap, not 
 - from `$1,000` up to `$5,000`: keep the single-position cap at `$250`
 - above `$5,000`: resume increasing the cap by `$25` per additional `$100`
 
-Those copied-buy buckets now scale more aggressively with bankroll. The first major step is at `$250` bankroll, where the target sizes become `$15 / $20 / $40`, and larger bankroll tiers continue increasing from there. Live mode still respects the configured/effective live max-order cap after the bucketed sizing is calculated.
+Those copied-buy buckets now derive directly from bankroll instead of a fixed ladder. For example, at `$250` bankroll the buckets are about `$9.38 / $12.50 / $25.00`, and at `$1,000` bankroll they are about `$37.50 / $50.00 / $100.00` before the existing cash and live-cap guardrails. Live mode still respects the configured/effective live max-order cap after the bucketed sizing is calculated.
 
 Temporary live test mode is environment-based so you can keep the same wallet and keys while forcing tiny live orders:
 
