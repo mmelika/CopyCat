@@ -22,7 +22,7 @@ If you are searching GitHub for a `Polymarket trading bot`, `Polymarket copy bot
 - `Minimum leader buy filter`: leader buys at `$40.00` or below are ignored, so copied buys only trigger when the source trade is greater than `$40.00`.
 - `Minimum follower buy size`: when a copied buy is eligible, the follower now allocates at least `$1.00` on that buy, subject to available cash and the rest of the existing guardrails.
 - `Leader-size buy buckets`: copied BUY sizing now works backward from a max single-buy target of `10%` of bankroll. Leader buys below `$100`, `$100-$499`, and `$500+` map to the low, mid, and max bucket respectively.
-- `Buy price ceiling`: the bot will not open or bootstrap a BUY position when the contract price is above `$0.90`.
+- `Buy price ceiling`: the bot will not open or bootstrap a BUY position when the contract price is above `$0.85`.
 - `Live minimum order guard`: live BUY orders are now fail-closed below `$1.00`, including bootstrap/current-position buys, so the bot will not send sub-minimum marketable orders to Polymarket.
 - `Tiered position cap`: once follower equity is above `$2,000`, each position is capped at `$400`, and that cap increases by `$400` for each additional `$2,500` of equity.
 - `Sell copying controls`: sells can be mirrored or ignored from settings.
@@ -104,7 +104,7 @@ Most runtime settings are editable from the dashboard:
 - minimum copied leader buy size: source buys must be greater than `$40.00`
 - minimum follower copied buy size: eligible copied buys are floored at `$1.00`
 - copied buy buckets: the max bucket is `10%` of bankroll, the mid bucket is `50%` of that max, and the low bucket is `37.5%` of that max
-- copied buy price ceiling: buys are skipped when the contract price is above `$0.90`
+- copied buy price ceiling: buys are skipped when the contract price is above `$0.85`
 - explicit leader sells only or optional inferred position-delta sells
 - leader-only sells or optional autonomous exit rules
 - shadow slippage and extra shadow slippage
