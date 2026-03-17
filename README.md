@@ -19,6 +19,7 @@ If you are searching GitHub for a `Polymarket trading bot`, `Polymarket copy bot
 - `Proportional sizing`: buy size is based on the leader account value versus your local shadow equity.
 - `Correlation-aware sizing`: correlated or high-conviction buys can use more of the available shadow cash.
 - `Cash-reserve aware execution`: buys are constrained by deployable cash, not the older exposure-cap logic.
+- `Tiered position cap`: once follower equity is above `$2,000`, each position is capped at `$400`, and that cap increases by `$400` for each additional `$2,500` of equity.
 - `Sell copying controls`: sells can be mirrored or ignored from settings.
 - `Leader-only sells by default`: follower positions now stay open unless the leader reduces, you sell manually, or you explicitly enable autonomous exit rules.
 - `No inferred position-delta sells by default`: temporary position API drops no longer fabricate sell events that can close and immediately reopen a follower trade.
