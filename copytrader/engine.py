@@ -18,7 +18,7 @@ from .polymarket import PolymarketClient
 MIN_BET_USD = 0.05
 MIN_SETTLEMENT_USD = 0.01
 MEANINGFUL_MIN_BET_USD = 1.00
-MIN_SOURCE_BUY_COPY_USD = 10.0
+MIN_SOURCE_BUY_COPY_USD = 1.0
 LIVE_TEST_ORDER_USD = 1.01
 COLLATERAL_DECIMALS = 6
 MIN_CASH_RESERVE_PCT = 0.20
@@ -34,7 +34,6 @@ PORTFOLIO_GROWTH_STEP_PCT = 0.50
 PORTFOLIO_GROWTH_STABILITY_SECONDS = 15
 PORTFOLIO_GROWTH_MAX_TARGET_USD = 100000.0
 HIGH_CONVICTION_TRADE_USD = 1000.0
-MIN_COPY_MARKET_VOLUME_USD = 100000.0
 MAX_BUY_EXPIRY_HOURS = 24
 POSITION_CAP_ACTIVATION_EQUITY_USD = 2000.0
 POSITION_CAP_BASE_USD = 400.0
@@ -1931,16 +1930,6 @@ class CopyTradingEngine:
                 return CopyDecision(
                     "skip",
                     f"Leader buy size ${source_amount_usd:.2f} is at or below the ${MIN_SOURCE_BUY_COPY_USD:.2f} minimum.",
-                )
-            market_context = self.client.fetch_market_metadata(trade.get("market_slug") or "")
-            market_volume_usd = round(float(market_context.get("volume_usd") or 0.0), 2)
-            if market_volume_usd < MIN_COPY_MARKET_VOLUME_USD:
-                return CopyDecision(
-                    "skip",
-                    (
-                        f"Market volume ${market_volume_usd:,.2f} is below the "
-                        f"${MIN_COPY_MARKET_VOLUME_USD:,.2f} minimum."
-                    ),
                 )
             expiry_guard_reason = _buy_expiry_guard_reason(trade, now=now)
             if expiry_guard_reason:
