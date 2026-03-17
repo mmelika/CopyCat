@@ -349,9 +349,9 @@ def _bucketed_buy_targets(local_equity: float) -> tuple[float, float, float]:
     mid_bucket = _round_up_to_cent(max_bucket * 0.50)
     low_bucket = _round_up_to_cent(max_bucket * 0.375)
     return (
-        max(low_bucket, MIN_FOLLOWER_BUY_USD),
-        max(mid_bucket, MIN_FOLLOWER_BUY_USD),
-        max(max_bucket, MIN_FOLLOWER_BUY_USD),
+        max(low_bucket, 10.0, MIN_FOLLOWER_BUY_USD),
+        max(mid_bucket, 12.0, MIN_FOLLOWER_BUY_USD),
+        max(max_bucket, 20.0, MIN_FOLLOWER_BUY_USD),
     )
 
 
