@@ -21,6 +21,7 @@ If you are searching GitHub for a `Polymarket trading bot`, `Polymarket copy bot
 - `Cash-reserve aware execution`: buys are constrained by deployable cash, not the older exposure-cap logic.
 - `Minimum leader buy filter`: leader buys at `$100.00` or below are ignored, so copied buys only trigger when the source trade is greater than `$100.00`.
 - `Minimum follower buy size`: when a copied buy is eligible, the follower now allocates at least `$1.00` on that buy, subject to available cash and the rest of the existing guardrails.
+- `Live minimum order guard`: live BUY orders are now fail-closed below `$1.00`, including bootstrap/current-position buys, so the bot will not send sub-minimum marketable orders to Polymarket.
 - `Tiered position cap`: once follower equity is above `$2,000`, each position is capped at `$400`, and that cap increases by `$400` for each additional `$2,500` of equity.
 - `Sell copying controls`: sells can be mirrored or ignored from settings.
 - `Leader-only sells by default`: follower positions now stay open unless the leader reduces, you sell manually, or you explicitly enable autonomous exit rules.

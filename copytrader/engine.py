@@ -20,6 +20,7 @@ MIN_FOLLOWER_BUY_USD = 1.0
 MIN_SETTLEMENT_USD = 0.01
 MEANINGFUL_MIN_BET_USD = 1.00
 MIN_SOURCE_BUY_COPY_USD = 100.0
+LIVE_MIN_ORDER_USD = 1.0
 LIVE_TEST_ORDER_USD = 1.01
 COLLATERAL_DECIMALS = 6
 MIN_CASH_RESERVE_PCT = 0.20
@@ -382,6 +383,10 @@ def _current_position_value(
         current_price = max(float(position.get("avg_price") or 0.0), float(fallback_price or 0.0))
     live_value = round(shares * current_price, 2) if current_price > 0 else 0.0
     return max(stored_value, live_value, 0.0)
+
+
+def _minimum_buy_amount_usd(execution_mode: str) -> float:
+    return LIVE_MIN_ORDER_USD if (execution_mode or "").strip().lower() == "live" else MIN_FOLLOWER_BUY_USD
 
 
 def _title_tokens(value: str) -> set[str]:
@@ -879,12 +884,14 @@ class LiveBroker:
         if not bool(int(settings.get("live_trading_enabled") or 0)):
             raise RuntimeError("Live trading is disabled in settings.")
         requested_amount_usd, test_mode_config = self._apply_test_mode(source_trade, requested_amount_usd)
+        side = source_trade.get("side") or ""
+        if side == "BUY" and requested_amount_usd < LIVE_MIN_ORDER_USD:
+            raise RuntimeError(f"Live BUY order ${requested_amount_usd:.2f} is below the Polymarket minimum of ${LIVE_MIN_ORDER_USD:.2f}.")
         live_snapshot = self.refresh_account_snapshot(settings, db_path)
         effective_max_order_usd = _effective_live_max_order_usd(
             float(settings.get("live_max_order_usd") or 0.0),
             float(live_snapshot.get("net_value") or 0.0),
         )
-        side = source_trade.get("side") or ""
         intent = self.client.build_live_order_intent(
             market_slug=source_trade.get("market_slug") or "",
             outcome=source_trade.get("outcome") or "",
@@ -2184,10 +2191,11 @@ class CopyTradingEngine:
         if not positions or leader_wallet_value <= 0:
             return 0
 
+        minimum_buy_amount = _minimum_buy_amount_usd(self._execution_mode(settings))
         portfolio = database.portfolio_totals(self.db_path, positions)
         remaining_cash = float(portfolio["cash_balance"])
         buying_capacity = remaining_cash
-        if buying_capacity < MIN_BET_USD:
+        if buying_capacity < minimum_buy_amount:
             database.set_app_state("bootstrap_positions_done_at", database.utc_now(), self.db_path)
             return 0
 
@@ -2196,7 +2204,7 @@ class CopyTradingEngine:
         position_value_cap = _position_value_cap(float(portfolio["net_value"]))
         ordered_positions = sorted(positions, key=lambda row: float(row.get("notional_usd") or 0.0), reverse=True)
         for position in ordered_positions:
-            if buying_capacity < MIN_BET_USD:
+            if buying_capacity < minimum_buy_amount:
                 break
             weight = float(position.get("notional_usd") or 0.0) / leader_wallet_value if leader_wallet_value > 0 else 0.0
             if weight <= 0:
@@ -2205,7 +2213,7 @@ class CopyTradingEngine:
             if position_value_cap is not None:
                 requested_amount = min(requested_amount, position_value_cap)
             requested_amount = min(requested_amount, buying_capacity)
-            if requested_amount < MIN_BET_USD:
+            if requested_amount < minimum_buy_amount:
                 continue
             bootstrap_trade = {
                 "source_trade_id": f"bootstrap:{position['position_key']}:{bootstrap_time}",
