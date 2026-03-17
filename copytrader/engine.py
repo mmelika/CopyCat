@@ -34,6 +34,7 @@ PORTFOLIO_GROWTH_STEP_PCT = 0.50
 PORTFOLIO_GROWTH_STABILITY_SECONDS = 15
 PORTFOLIO_GROWTH_MAX_TARGET_USD = 100000.0
 HIGH_CONVICTION_TRADE_USD = 1000.0
+MIN_COPY_MARKET_VOLUME_USD = 100000.0
 MAX_BUY_EXPIRY_HOURS = 24
 POSITION_CAP_ACTIVATION_EQUITY_USD = 2000.0
 POSITION_CAP_BASE_USD = 400.0
@@ -336,6 +337,22 @@ def _position_value_cap(local_equity: float) -> float | None:
         return None
     increments = math.floor((equity - POSITION_CAP_ACTIVATION_EQUITY_USD) / POSITION_CAP_STEP_EQUITY_USD)
     return round(POSITION_CAP_BASE_USD + (max(increments, 0) * POSITION_CAP_STEP_USD), 2)
+
+
+def _effective_live_max_order_usd(configured_cap: float, portfolio_value: float) -> float:
+    base_cap = max(float(configured_cap or 0.0), 25.0)
+    equity = max(float(portfolio_value or 0.0), 0.0)
+    if equity < 200:
+        return round(base_cap, 2)
+    if equity < 1000:
+        increments = math.floor((equity - 200) / 100)
+        stepped_cap = 45.0 + (max(increments, 0) * 25.0)
+        return round(max(base_cap, stepped_cap), 2)
+    if equity <= 5000:
+        return round(max(base_cap, 250.0), 2)
+    increments = math.ceil((equity - 5000) / 100)
+    stepped_cap = 250.0 + (max(increments, 0) * 25.0)
+    return round(max(base_cap, stepped_cap), 2)
 
 
 def _current_position_value(
@@ -862,17 +879,21 @@ class LiveBroker:
         if not bool(int(settings.get("live_trading_enabled") or 0)):
             raise RuntimeError("Live trading is disabled in settings.")
         requested_amount_usd, test_mode_config = self._apply_test_mode(source_trade, requested_amount_usd)
+        live_snapshot = self.refresh_account_snapshot(settings, db_path)
+        effective_max_order_usd = _effective_live_max_order_usd(
+            float(settings.get("live_max_order_usd") or 0.0),
+            float(live_snapshot.get("net_value") or 0.0),
+        )
+        side = source_trade.get("side") or ""
         intent = self.client.build_live_order_intent(
             market_slug=source_trade.get("market_slug") or "",
             outcome=source_trade.get("outcome") or "",
-            side=source_trade.get("side") or "",
+            side=side,
             requested_amount_usd=requested_amount_usd,
             price_buffer_bps=float(settings.get("live_price_buffer_bps") or 0.0),
         )
-        max_order_usd = max(float(settings.get("live_max_order_usd") or 0.0), 0.0)
-        if max_order_usd > 0 and float(intent["requested_amount_usd"]) > max_order_usd + 1e-9:
-            raise RuntimeError(f"Requested live order exceeds configured max of ${max_order_usd:.2f}.")
-        side = source_trade.get("side") or ""
+        if effective_max_order_usd > 0 and float(intent["requested_amount_usd"]) > effective_max_order_usd + 1e-9:
+            raise RuntimeError(f"Requested live order exceeds effective max of ${effective_max_order_usd:.2f}.")
         live_order_payload = None
         try:
             from py_clob_client.clob_types import MarketOrderArgs, OrderType
@@ -930,6 +951,7 @@ class LiveBroker:
             "reference_price": intent["reference_price"],
             "book_price": intent["book_price"],
             "price_buffer_bps": intent["price_buffer_bps"],
+            "effective_max_order_usd": effective_max_order_usd,
             "submission_enabled": True,
             "test_mode": bool(test_mode_config["enabled"]),
             "test_mode_max_order_usd": float(test_mode_config["max_order_usd"]),
@@ -1910,6 +1932,16 @@ class CopyTradingEngine:
                     "skip",
                     f"Leader buy size ${source_amount_usd:.2f} is at or below the ${MIN_SOURCE_BUY_COPY_USD:.2f} minimum.",
                 )
+            market_context = self.client.fetch_market_metadata(trade.get("market_slug") or "")
+            market_volume_usd = round(float(market_context.get("volume_usd") or 0.0), 2)
+            if market_volume_usd < MIN_COPY_MARKET_VOLUME_USD:
+                return CopyDecision(
+                    "skip",
+                    (
+                        f"Market volume ${market_volume_usd:,.2f} is below the "
+                        f"${MIN_COPY_MARKET_VOLUME_USD:,.2f} minimum."
+                    ),
+                )
             expiry_guard_reason = _buy_expiry_guard_reason(trade, now=now)
             if expiry_guard_reason:
                 return CopyDecision("skip", expiry_guard_reason)
@@ -1937,6 +1969,14 @@ class CopyTradingEngine:
                         ),
                     )
                 requested_amount = min(requested_amount, remaining_position_capacity)
+            if self._execution_mode(settings) == "live" and source_amount_usd > HIGH_CONVICTION_TRADE_USD:
+                requested_amount = min(
+                    buying_capacity,
+                    _effective_live_max_order_usd(
+                        float(settings.get("live_max_order_usd") or 0.0),
+                        local_equity,
+                    ),
+                )
             requested_amount = max(requested_amount, MIN_BET_USD)
             requested_amount = min(requested_amount, buying_capacity)
             requested_amount = _round_up_to_cent(requested_amount) if requested_amount > 0 else 0.0

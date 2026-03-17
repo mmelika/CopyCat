@@ -20,6 +20,7 @@ If you are searching GitHub for a `Polymarket trading bot`, `Polymarket copy bot
 - `Correlation-aware sizing`: correlated or high-conviction buys can use more of the available shadow cash.
 - `Cash-reserve aware execution`: buys are constrained by deployable cash, not the older exposure-cap logic.
 - `Minimum leader buy filter`: leader buys at `$10.00` or below are ignored, so copied buys only trigger when the source trade is greater than `$10.00`.
+- `Minimum market volume filter`: copied buys are skipped unless the market's total volume is at least `$100,000`.
 - `Tiered position cap`: once follower equity is above `$2,000`, each position is capped at `$400`, and that cap increases by `$400` for each additional `$2,500` of equity.
 - `Sell copying controls`: sells can be mirrored or ignored from settings.
 - `Leader-only sells by default`: follower positions now stay open unless the leader reduces, you sell manually, or you explicitly enable autonomous exit rules.
@@ -37,6 +38,8 @@ If you are searching GitHub for a `Polymarket trading bot`, `Polymarket copy bot
 - `Live execution scaffold`: there is a guarded Polymarket CLOB order-intent path and live account reconciliation, but this should be treated as non-production.
 - `Live entry drift tracking`: live order intents now calculate entry drift from the live limit price versus the source/reference price, and the dashboard summarizes that drag alongside shadow drift.
 - `Per-position drift visibility`: the Active Holdings rows now show drift per position, including average entry drift in bps and cumulative drag in USD for that holding.
+- `Stepped live max order cap`: live buys respect a base `$25` max order cap, step up to `$45` once portfolio value reaches `$200`, step up to `$70` at `$300`, add another `$25` for each additional `$100` until the cap reaches `$250`, then hold that `$250` single-position cap from `$1,000` up to `$5,000` of portfolio value.
+- `High-conviction buy override`: when the leader buys more than `$1,000`, the live follower now uses its full allowed live max order size instead of the smaller proportional amount.
 
 ## What This Repo Is Not
 
@@ -98,6 +101,17 @@ Most runtime settings are editable from the dashboard:
 - leader-only sells or optional autonomous exit rules
 - shadow slippage and extra shadow slippage
 - execution mode: `shadow` or guarded `live` scaffold
+
+In live mode, `live_max_order_usd` is now the floor for the live order cap, not always the final cap. The engine uses the greater of that configured value or the stepped schedule based on live portfolio value:
+
+- below `$200`: `$25`
+- at `$200`: `$45`
+- at `$300`: `$70`
+- each additional `$100`: add `$25` more until the cap reaches `$250`
+- from `$1,000` up to `$5,000`: keep the single-position cap at `$250`
+- above `$5,000`: resume increasing the cap by `$25` per additional `$100`
+
+For leader buys above `$1,000`, the live copy path now targets that full allowed cap, subject to available cash and the rest of the existing guardrails.
 
 Temporary live test mode is environment-based so you can keep the same wallet and keys while forcing tiny live orders:
 

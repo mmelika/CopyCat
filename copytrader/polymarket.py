@@ -305,6 +305,14 @@ class PolymarketClient:
             "category": (item.get("category") or "").strip(),
             "market_type": (item.get("marketType") or "").strip(),
             "sports_market_type": (item.get("sportsMarketType") or "").strip(),
+            "volume_usd": _to_float(
+                item.get("volume")
+                or item.get("volumeUsd")
+                or item.get("volumeNum")
+                or item.get("liquidityClob")
+                or 0.0,
+                0.0,
+            ),
             "fees_enabled": bool(item.get("feesEnabled", False)),
             "maker_base_fee": _to_float(item.get("makerBaseFee"), 0.0),
             "taker_base_fee": _to_float(item.get("takerBaseFee"), 0.0),
