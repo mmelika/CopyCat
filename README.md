@@ -103,7 +103,7 @@ Most runtime settings are editable from the dashboard:
 - copy-sells on or off
 - minimum copied leader buy size: source buys must be greater than `$40.00`
 - minimum follower copied buy size: eligible copied buys are floored at `$1.00`
-- copied buy buckets: the max bucket is `10%` of bankroll, the mid bucket is `50%` of that max, and the low bucket is `37.5%` of that max, but the buckets never scale below the base `$10 / $12 / $20` schedule
+- copied buy buckets: the max bucket is `10%` of bankroll, the mid bucket is `50%` of that max, and the low bucket is `37.5%` of that max
 - copied buy price ceiling: buys are skipped when the contract price is above `$0.90`
 - explicit leader sells only or optional inferred position-delta sells
 - leader-only sells or optional autonomous exit rules
@@ -119,7 +119,7 @@ In live mode, `live_max_order_usd` is now the floor for the live order cap, not 
 - from `$1,000` up to `$5,000`: keep the single-position cap at `$250`
 - above `$5,000`: resume increasing the cap by `$25` per additional `$100`
 
-Those copied-buy buckets now derive directly from bankroll instead of a fixed ladder, but they do not shrink below the base `$10 / $12 / $20` levels. For example, at `$80` bankroll the buckets still stay at `$10 / $12 / $20`, at `$250` bankroll they become about `$10 / $12.50 / $25.00`, and at `$1,000` bankroll they are about `$37.50 / $50.00 / $100.00` before the existing cash and live-cap guardrails. Live mode still respects the configured/effective live max-order cap after the bucketed sizing is calculated.
+Those copied-buy buckets now derive directly from bankroll instead of a fixed ladder. For example, at `$250` bankroll the buckets are about `$9.38 / $12.50 / $25.00`, and at `$1,000` bankroll they are about `$37.50 / $50.00 / $100.00` before the existing cash and live-cap guardrails. Live mode still respects the configured/effective live max-order cap after the bucketed sizing is calculated.
 
 Temporary live test mode is environment-based so you can keep the same wallet and keys while forcing tiny live orders:
 
