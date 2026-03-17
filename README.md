@@ -19,7 +19,7 @@ If you are searching GitHub for a `Polymarket trading bot`, `Polymarket copy bot
 - `Proportional sizing`: buy size is based on the leader account value versus your local shadow equity.
 - `Correlation-aware sizing`: correlated or high-conviction buys can use more of the available shadow cash.
 - `Cash-reserve aware execution`: buys are constrained by deployable cash, not the older exposure-cap logic.
-- `Minimum leader buy filter`: leader buys at `$60.00` or below are ignored, so copied buys only trigger when the source trade is greater than `$60.00`.
+- `Minimum leader buy filter`: leader buys at `$40.00` or below are ignored, so copied buys only trigger when the source trade is greater than `$40.00`.
 - `Minimum follower buy size`: when a copied buy is eligible, the follower now allocates at least `$1.00` on that buy, subject to available cash and the rest of the existing guardrails.
 - `Live minimum order guard`: live BUY orders are now fail-closed below `$1.00`, including bootstrap/current-position buys, so the bot will not send sub-minimum marketable orders to Polymarket.
 - `Tiered position cap`: once follower equity is above `$2,000`, each position is capped at `$400`, and that cap increases by `$400` for each additional `$2,500` of equity.
@@ -99,7 +99,7 @@ Most runtime settings are editable from the dashboard:
 - shadow starting balance and current cash balance
 - sync interval and trade fetch limit
 - copy-sells on or off
-- minimum copied leader buy size: source buys must be greater than `$60.00`
+- minimum copied leader buy size: source buys must be greater than `$40.00`
 - minimum follower copied buy size: eligible copied buys are floored at `$1.00`
 - explicit leader sells only or optional inferred position-delta sells
 - leader-only sells or optional autonomous exit rules
