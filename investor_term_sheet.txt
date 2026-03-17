@@ -1,0 +1,43 @@
+SHORT-FORM TERM SHEET
+
+Date: [Date]
+
+Parties
+Investor: [Investor Name]
+Operator/Developer: [Your Name]
+
+Investment
+The Investor will provide $100.00 USD for the first live trading attempt of the
+bot or model operated by the Operator.
+
+Profit Split
+If the first attempt is profitable, net profits will be split 50% to the
+Investor and 50% to the Operator.
+
+Net Profits
+Net profits means realized gains minus trading losses, exchange fees,
+transaction costs, and other direct agreed expenses.
+
+Loss and Retry Terms
+If the initial $100.00 USD is lost, the Operator may request up to two
+additional attempts, but only after an agreed improvement to the model. Each
+additional attempt requires the Investor's approval and separate funding.
+
+Source Code Access
+If the bot is profitable on the first attempt, the Investor will be given access
+to the source code. Access to the source code does not transfer ownership of the
+intellectual property unless both parties agree otherwise in writing.
+
+Risk
+The Investor understands that trading is speculative and that the full
+investment may be lost. The Operator makes no guarantee of profit or capital
+preservation.
+
+Nature of Document
+This document is a summary of business terms for discussion purposes and is
+non-binding unless replaced by a signed definitive agreement.
+
+Signatures
+
+Investor: ____________________  Date: ____________________
+Operator: ____________________  Date: ____________________
