@@ -18,13 +18,26 @@ jobs:
             export ENGINE_SERVICE_NAME="${{ secrets.ENGINE_SERVICE_NAME }}"
             export WEB_SERVICE_NAME="${WEB_SERVICE_NAME:-copycat-web}"
             export ENGINE_SERVICE_NAME="${ENGINE_SERVICE_NAME:-copycat-engine}"
-            sudo systemctl restart "$WEB_SERVICE_NAME" "$ENGINE_SERVICE_NAME"
+            echo "== restarting services =="
+            timeout 30s sudo systemctl restart nginx || true
+            timeout 30s sudo systemctl restart "$WEB_SERVICE_NAME" || true
+            timeout 30s sudo systemctl restart "$ENGINE_SERVICE_NAME" || true
             sleep 5
+            echo "== active states =="
+            sudo systemctl is-active nginx || true
+            sudo systemctl is-active "$WEB_SERVICE_NAME" || true
+            sudo systemctl is-active "$ENGINE_SERVICE_NAME" || true
             echo "== systemctl status: $WEB_SERVICE_NAME =="
             timeout 20s sudo systemctl --no-pager --full status "$WEB_SERVICE_NAME" | sed -n '1,40p' || true
             echo "== systemctl status: $ENGINE_SERVICE_NAME =="
             timeout 20s sudo systemctl --no-pager --full status "$ENGINE_SERVICE_NAME" | sed -n '1,40p' || true
+            echo "== systemctl status: nginx =="
+            timeout 20s sudo systemctl --no-pager --full status nginx | sed -n '1,40p' || true
+            echo "== nginx journal tail =="
+            timeout 20s sudo journalctl -u nginx -n 80 --no-pager || true
             echo "== engine journal tail =="
             timeout 20s sudo journalctl -u "$ENGINE_SERVICE_NAME" -n 80 --no-pager || true
             echo "== localhost healthz =="
             timeout 20s curl -fsS http://127.0.0.1:8060/healthz || true
+            echo "== localhost root =="
+            timeout 20s curl -I -fsS http://127.0.0.1/ || true
