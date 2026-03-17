@@ -1778,7 +1778,7 @@ def sell_single_position(_clicks, ids):
 
 
 if __name__ == "__main__":
-    host = os.environ.get("HOST", "127.0.0.1")
+    host = os.environ.get("HOST", "0.0.0.0")
     port = int(os.environ.get("PORT", "8060"))
     debug = os.environ.get("DEBUG", "").lower() in {"1", "true", "yes"}
     app.run(debug=debug, host=host, port=port)

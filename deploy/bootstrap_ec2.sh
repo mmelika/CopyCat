@@ -50,4 +50,22 @@ fi
 sudo nginx -t
 sudo systemctl restart nginx
 
-echo "PolyCopy deployed on port $PORT with services $WEB_SERVICE_NAME and $ENGINE_SERVICE_NAME as user $RUN_USER"
+PUBLIC_IP=""
+if command -v curl >/dev/null 2>&1; then
+  TOKEN="$(curl -fsS -m 2 -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 60" || true)"
+  if [ -n "$TOKEN" ]; then
+    PUBLIC_IP="$(curl -fsS -m 2 -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/public-ipv4" || true)"
+  else
+    PUBLIC_IP="$(curl -fsS -m 2 "http://169.254.169.254/latest/meta-data/public-ipv4" || true)"
+  fi
+fi
+
+echo "PolyCopy deployed with services $WEB_SERVICE_NAME and $ENGINE_SERVICE_NAME as user $RUN_USER"
+echo "Nginx listens on port 80 and proxies to the app on port $PORT"
+if [ -n "$PUBLIC_IP" ]; then
+  echo "Open http://$PUBLIC_IP in your browser"
+else
+  echo "Open http://YOUR_EC2_PUBLIC_IP in your browser"
+fi
+echo "Your EC2 security group must allow inbound TCP 80 for the public site"
+echo "Allow inbound TCP $PORT only if you want direct app access without nginx"

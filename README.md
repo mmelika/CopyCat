@@ -70,7 +70,7 @@ pip install -r requirements.txt
 python3 app.py
 ```
 
-Open [http://127.0.0.1:8050](http://127.0.0.1:8050).
+The app listens on `0.0.0.0:8060` by default, so open [http://127.0.0.1:8060](http://127.0.0.1:8060) locally or `http://YOUR_SERVER_IP:8060` from another machine. You can override that with `HOST` and `PORT`.
 
 To run the sync worker separately instead of inside the web process:
 
@@ -137,6 +137,14 @@ cd PolyCopy
 bash deploy/bootstrap_ec2.sh
 ```
 
+For EC2, browse to `http://YOUR_EC2_PUBLIC_IP` after bootstrap. Nginx listens on port `80` and proxies to the app on port `8060`, so the public URL should normally use port `80`, not `8060`.
+
+Your AWS security group must allow:
+
+- inbound TCP `80` for the site through Nginx
+- inbound TCP `22` for SSH
+- inbound TCP `8060` only if you intentionally want to bypass Nginx and hit the app directly
+
 ## SEO Notes
 
 Relevant search phrases this project genuinely fits:
@@ -151,3 +159,7 @@ Relevant search phrases this project genuinely fits:
 ## Disclaimer
 
 This is a research and monitoring tool. Shadow mode is the primary supported path. If you experiment with the live scaffold, treat it as unfinished and review the code closely before trusting it with capital.
+
+## Extra Documents
+
+- [`investor_term_sheet.txt`](/Users/marco/Documents/AI Shit/CopyPelosi/investor_term_sheet.txt) is a short one-page investor term sheet covering a $100 initial bot allocation, a 50/50 profit split, up to two optional retry attempts after a loss subject to agreed model improvements, and source-code access if the first attempt is profitable.
