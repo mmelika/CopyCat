@@ -332,6 +332,33 @@ def _copy_trade_size(
     return min(max(conviction_floor, 0.0), buying_capacity)
 
 
+def _bankroll_size_multiplier(local_equity: float) -> float:
+    equity = max(float(local_equity or 0.0), 0.0)
+    if equity < 500:
+        return 1.0
+    if equity < 1000:
+        return 1.25
+    if equity < 2000:
+        return 1.5
+    if equity < 3500:
+        return 2.0
+    if equity < 5000:
+        return 2.5
+    increments = math.floor((equity - 5000) / 2500)
+    return 3.0 + (max(increments, 0) * 0.5)
+
+
+def _bucketed_buy_amount_usd(source_amount_usd: float, local_equity: float) -> float:
+    source_amount = max(float(source_amount_usd or 0.0), 0.0)
+    if source_amount < 100:
+        base_amount = 10.0
+    elif source_amount <= 300:
+        base_amount = 12.0
+    else:
+        base_amount = 20.0
+    return _round_up_to_cent(base_amount * _bankroll_size_multiplier(local_equity))
+
+
 def _position_value_cap(local_equity: float) -> float | None:
     equity = max(float(local_equity), 0.0)
     if equity <= POSITION_CAP_ACTIVATION_EQUITY_USD:
@@ -1917,16 +1944,18 @@ class CopyTradingEngine:
                 single_bet_cash_pct = 0.85
             elif correlation_strength >= 0.45:
                 single_bet_cash_pct = 0.65
-            elif float(trade.get("amount_usd") or 0.0) >= HIGH_CONVICTION_TRADE_USD:
-                single_bet_cash_pct = 0.60
         buying_capacity = min(float(portfolio["cash_balance"]), _round_up_to_cent(cash_balance * single_bet_cash_pct))
-        requested_amount = _copy_trade_size(
-            local_equity,
-            trade.get("amount_usd") or 0.0,
-            leader_wallet_value,
-            buying_capacity,
-            cash_balance,
-            correlation_strength=correlation_strength,
+        requested_amount = (
+            _bucketed_buy_amount_usd(trade.get("amount_usd") or 0.0, local_equity)
+            if side == "BUY"
+            else _copy_trade_size(
+                local_equity,
+                trade.get("amount_usd") or 0.0,
+                leader_wallet_value,
+                buying_capacity,
+                cash_balance,
+                correlation_strength=correlation_strength,
+            )
         )
 
         if side == "SELL" and not int(settings["copy_sells"]):
@@ -1966,9 +1995,9 @@ class CopyTradingEngine:
                         ),
                     )
                 requested_amount = min(requested_amount, remaining_position_capacity)
-            if self._execution_mode(settings) == "live" and source_amount_usd > HIGH_CONVICTION_TRADE_USD:
+            if self._execution_mode(settings) == "live":
                 requested_amount = min(
-                    buying_capacity,
+                    requested_amount,
                     _effective_live_max_order_usd(
                         float(settings.get("live_max_order_usd") or 0.0),
                         local_equity,
