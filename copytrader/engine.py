@@ -16,9 +16,10 @@ from .config import DB_PATH
 from .polymarket import PolymarketClient
 
 MIN_BET_USD = 0.05
+MIN_FOLLOWER_BUY_USD = 1.0
 MIN_SETTLEMENT_USD = 0.01
 MEANINGFUL_MIN_BET_USD = 1.00
-MIN_SOURCE_BUY_COPY_USD = 1.0
+MIN_SOURCE_BUY_COPY_USD = 100.0
 LIVE_TEST_ORDER_USD = 1.01
 COLLATERAL_DECIMALS = 6
 MIN_CASH_RESERVE_PCT = 0.20
@@ -1934,7 +1935,7 @@ class CopyTradingEngine:
             expiry_guard_reason = _buy_expiry_guard_reason(trade, now=now)
             if expiry_guard_reason:
                 return CopyDecision("skip", expiry_guard_reason)
-            if buying_capacity < MIN_BET_USD:
+            if buying_capacity < MIN_FOLLOWER_BUY_USD:
                 return CopyDecision("skip", "No remaining buying capacity.")
             duplicate_reason = self._same_price_buy_guard(trade, settings)
             if duplicate_reason:
@@ -1949,7 +1950,7 @@ class CopyTradingEngine:
                     db_path=self.db_path,
                 )
                 remaining_position_capacity = round(position_value_cap - current_position_value, 2)
-                if remaining_position_capacity < MIN_BET_USD:
+                if remaining_position_capacity < MIN_FOLLOWER_BUY_USD:
                     return CopyDecision(
                         "skip",
                         (
@@ -1966,7 +1967,7 @@ class CopyTradingEngine:
                         local_equity,
                     ),
                 )
-            requested_amount = max(requested_amount, MIN_BET_USD)
+            requested_amount = max(requested_amount, MIN_FOLLOWER_BUY_USD)
             requested_amount = min(requested_amount, buying_capacity)
             requested_amount = _round_up_to_cent(requested_amount) if requested_amount > 0 else 0.0
             return CopyDecision("copy", "Buy trade eligible.", requested_amount_usd=requested_amount)

@@ -19,7 +19,8 @@ If you are searching GitHub for a `Polymarket trading bot`, `Polymarket copy bot
 - `Proportional sizing`: buy size is based on the leader account value versus your local shadow equity.
 - `Correlation-aware sizing`: correlated or high-conviction buys can use more of the available shadow cash.
 - `Cash-reserve aware execution`: buys are constrained by deployable cash, not the older exposure-cap logic.
-- `Minimum leader buy filter`: leader buys at `$1.00` or below are ignored, so copied buys only trigger when the source trade is greater than `$1.00`.
+- `Minimum leader buy filter`: leader buys at `$100.00` or below are ignored, so copied buys only trigger when the source trade is greater than `$100.00`.
+- `Minimum follower buy size`: when a copied buy is eligible, the follower now allocates at least `$1.00` on that buy, subject to available cash and the rest of the existing guardrails.
 - `Tiered position cap`: once follower equity is above `$2,000`, each position is capped at `$400`, and that cap increases by `$400` for each additional `$2,500` of equity.
 - `Sell copying controls`: sells can be mirrored or ignored from settings.
 - `Leader-only sells by default`: follower positions now stay open unless the leader reduces, you sell manually, or you explicitly enable autonomous exit rules.
@@ -95,7 +96,8 @@ Most runtime settings are editable from the dashboard:
 - shadow starting balance and current cash balance
 - sync interval and trade fetch limit
 - copy-sells on or off
-- minimum copied leader buy size: source buys must be greater than `$1.00`
+- minimum copied leader buy size: source buys must be greater than `$100.00`
+- minimum follower copied buy size: eligible copied buys are floored at `$1.00`
 - explicit leader sells only or optional inferred position-delta sells
 - leader-only sells or optional autonomous exit rules
 - shadow slippage and extra shadow slippage
