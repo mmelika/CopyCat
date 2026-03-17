@@ -22,6 +22,7 @@ MEANINGFUL_MIN_BET_USD = 1.00
 MIN_SOURCE_BUY_COPY_USD = 40.0
 LIVE_MIN_ORDER_USD = 1.0
 LIVE_TEST_ORDER_USD = 1.01
+MAX_BUY_ENTRY_PRICE = 0.90
 COLLATERAL_DECIMALS = 6
 MIN_CASH_RESERVE_PCT = 0.20
 BASE_SINGLE_BET_CASH_PCT = 0.20
@@ -243,6 +244,16 @@ def _buy_expiry_guard_reason(trade: dict, now: datetime | None = None) -> str | 
     return None
 
 
+def _buy_price_guard_reason(price: float) -> str | None:
+    candidate_price = max(float(price or 0.0), 0.0)
+    if candidate_price > MAX_BUY_ENTRY_PRICE:
+        return (
+            f"Entry price ${candidate_price:.2f} is above the "
+            f"${MAX_BUY_ENTRY_PRICE:.2f} buy limit."
+        )
+    return None
+
+
 def _normalize_text(value: str) -> str:
     text = (value or "").strip().lower()
     return re.sub(r"[^a-z0-9]+", " ", text).strip()
@@ -332,31 +343,34 @@ def _copy_trade_size(
     return min(max(conviction_floor, 0.0), buying_capacity)
 
 
-def _bankroll_size_multiplier(local_equity: float) -> float:
+def _bucketed_buy_targets(local_equity: float) -> tuple[float, float, float]:
     equity = max(float(local_equity or 0.0), 0.0)
+    if equity < 250:
+        return (10.0, 12.0, 20.0)
     if equity < 500:
-        return 1.0
+        return (15.0, 20.0, 40.0)
     if equity < 1000:
-        return 1.25
+        return (20.0, 28.0, 55.0)
     if equity < 2000:
-        return 1.5
-    if equity < 3500:
-        return 2.0
+        return (25.0, 36.0, 70.0)
     if equity < 5000:
-        return 2.5
+        return (35.0, 50.0, 100.0)
     increments = math.floor((equity - 5000) / 2500)
-    return 3.0 + (max(increments, 0) * 0.5)
+    return (
+        40.0 + (max(increments, 0) * 5.0),
+        60.0 + (max(increments, 0) * 10.0),
+        120.0 + (max(increments, 0) * 20.0),
+    )
 
 
 def _bucketed_buy_amount_usd(source_amount_usd: float, local_equity: float) -> float:
     source_amount = max(float(source_amount_usd or 0.0), 0.0)
+    low_target, mid_target, high_target = _bucketed_buy_targets(local_equity)
     if source_amount < 100:
-        base_amount = 10.0
-    elif source_amount <= 300:
-        base_amount = 12.0
-    else:
-        base_amount = 20.0
-    return _round_up_to_cent(base_amount * _bankroll_size_multiplier(local_equity))
+        return low_target
+    if source_amount < 500:
+        return mid_target
+    return high_target
 
 
 def _position_value_cap(local_equity: float) -> float | None:
@@ -1968,6 +1982,9 @@ class CopyTradingEngine:
                     "skip",
                     f"Leader buy size ${source_amount_usd:.2f} is at or below the ${MIN_SOURCE_BUY_COPY_USD:.2f} minimum.",
                 )
+            buy_price_guard_reason = _buy_price_guard_reason(float(trade.get("price") or 0.0))
+            if buy_price_guard_reason:
+                return CopyDecision("skip", buy_price_guard_reason)
             expiry_guard_reason = _buy_expiry_guard_reason(trade, now=now)
             if expiry_guard_reason:
                 return CopyDecision("skip", expiry_guard_reason)
@@ -2235,6 +2252,9 @@ class CopyTradingEngine:
         for position in ordered_positions:
             if buying_capacity < minimum_buy_amount:
                 break
+            buy_price_guard_reason = _buy_price_guard_reason(float(position.get("price") or 0.0))
+            if buy_price_guard_reason:
+                continue
             weight = float(position.get("notional_usd") or 0.0) / leader_wallet_value if leader_wallet_value > 0 else 0.0
             if weight <= 0:
                 continue
