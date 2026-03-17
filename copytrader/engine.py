@@ -2372,14 +2372,44 @@ class CopyTradingEngine:
             ),
         )[0]
 
+    def _strict_sell_match(self, trade: dict, records: list[dict]) -> tuple[dict | None, str]:
+        alias_index = self._build_alias_index(records)
+        direct_key = f"{trade['market_slug']}:{trade['outcome']}"
+        direct_position = next((row for row in records if row.get("position_key") == direct_key), None)
+        if direct_position and float(direct_position.get("shares") or 0.0) > 0:
+            return direct_position, "direct-position-key"
+
+        trade_aliases = _position_aliases(trade)
+        matched_position = self._resolve_alias_match(trade, alias_index)
+        if not matched_position:
+            return None, ""
+
+        shared_aliases = trade_aliases.intersection(_position_aliases(matched_position))
+        if not shared_aliases:
+            return None, ""
+
+        alias_priority = ("token:", "condition:", "slug:", "pk:")
+        matched_alias = ""
+        for prefix in alias_priority:
+            matched_alias = next((alias for alias in sorted(shared_aliases) if alias.startswith(prefix)), "")
+            if matched_alias:
+                break
+        if not matched_alias:
+            return None, ""
+
+        alias_type = matched_alias.split(":", 1)[0]
+        return matched_position, f"alias-{alias_type}"
+
     def _find_matching_local_position(self, trade: dict) -> tuple[dict | None, str]:
+        if (trade.get("side") or "").upper() == "SELL":
+            return self._strict_sell_match(trade, database.get_local_positions(self.db_path))
         return self._find_matching_position_in_records(trade, database.get_local_positions(self.db_path))
 
     def _find_matching_marked_local_position(self, trade: dict, source_positions: list[dict]) -> tuple[dict | None, str]:
-        return self._find_matching_position_in_records(
-            trade,
-            database.list_local_positions_marked(self.db_path, source_positions=source_positions),
-        )
+        records = database.list_local_positions_marked(self.db_path, source_positions=source_positions)
+        if (trade.get("side") or "").upper() == "SELL":
+            return self._strict_sell_match(trade, records)
+        return self._find_matching_position_in_records(trade, records)
 
     def _buy_correlation_strength(self, trade: dict, source_positions: list[dict]) -> float:
         open_positions = [
